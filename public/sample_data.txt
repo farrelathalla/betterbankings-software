@@ -1,0 +1,6 @@
+Reporting Date	AccountID	CCY	Outstanding	Interest Rate	Start Date	End Date	Installment	Product Type	Segment	Daerah	KodePos	Insured/Uninsured	Transactional/Non Transactional
+31/01/2025	ACC001	IDR	1000000000	9.00	15/01/2024	15/01/2026	Yes	KPR	Retail	Jakarta	10110	Insured	Transactional
+31/01/2025	ACC002	IDR	500000000	10.50	01/06/2024	01/03/2025	No	Deposito	Corporate	Bandung	40123	Uninsured	Non Transactional
+31/01/2025	ACC003	USD	800000	8.25	01/01/2023	01/07/2028	Yes	KMK	SME	Surabaya	60234	Insured	Transactional
+31/01/2025	ACC004	IDR	250000000	7.50	10/10/2024	10/02/2025	No	Tabungan	Retail	Medan	20345	Insured	Non Transactional
+31/01/2025	ACC005	IDR	2000000000	11.00	01/03/2022	01/03/2032	Yes	KI	Corporate	Jakarta	10220	Uninsured	Transactional
