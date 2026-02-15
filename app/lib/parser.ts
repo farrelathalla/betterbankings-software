@@ -29,7 +29,17 @@ function parseDate(dateStr: string): Date {
 }
 
 function parseNumber(numStr: string): number {
-  const trimmed = numStr.trim().replace(/,/g, "");
+  // Remove quotes, thousands separators (both . and ,)
+  let trimmed = numStr.trim().replace(/"/g, "");
+
+  // If number uses period as thousands separator and comma as decimal (e.g. 1.000.000,50)
+  if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(trimmed)) {
+    trimmed = trimmed.replace(/\./g, "").replace(",", ".");
+  } else {
+    // Standard: remove commas as thousands separators
+    trimmed = trimmed.replace(/,/g, "");
+  }
+
   const val = parseFloat(trimmed);
   if (isNaN(val)) {
     throw new Error(`Invalid number: "${numStr}"`);
@@ -37,13 +47,86 @@ function parseNumber(numStr: string): number {
   return val;
 }
 
+/**
+ * Parse a single CSV/TSV line respecting quoted fields.
+ * Handles: "Jawa Barat", "Jakarta Selatan", fields with commas inside quotes, etc.
+ */
+function parseCSVLine(line: string, delimiter: string): string[] {
+  const fields: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  let i = 0;
+
+  while (i < line.length) {
+    const char = line[i];
+
+    if (inQuotes) {
+      if (char === '"') {
+        // Check for escaped quote ""
+        if (i + 1 < line.length && line[i + 1] === '"') {
+          current += '"';
+          i += 2;
+          continue;
+        }
+        // End of quoted field
+        inQuotes = false;
+        i++;
+        continue;
+      }
+      current += char;
+      i++;
+    } else {
+      if (char === '"') {
+        inQuotes = true;
+        i++;
+        continue;
+      }
+      if (char === delimiter || (delimiter === "\t" && char === "\t")) {
+        fields.push(current.trim());
+        current = "";
+        i++;
+        continue;
+      }
+      current += char;
+      i++;
+    }
+  }
+  // Push last field
+  fields.push(current.trim());
+  return fields;
+}
+
+/**
+ * Auto-detect delimiter by analyzing the header row.
+ * Prioritizes: tab > semicolon > comma (since commas can appear inside numbers).
+ */
 export function detectDelimiter(text: string): string {
   const firstLine = text.split("\n")[0];
-  // Count potential delimiters
-  const tabCount = (firstLine.match(/\t/g) || []).length;
-  const semiCount = (firstLine.match(/;/g) || []).length;
-  const commaCount = (firstLine.match(/,/g) || []).length;
 
+  // Count delimiters OUTSIDE of quoted fields
+  let tabCount = 0;
+  let semiCount = 0;
+  let commaCount = 0;
+  let inQuotes = false;
+
+  for (const char of firstLine) {
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (!inQuotes) {
+      if (char === "\t") tabCount++;
+      else if (char === ";") semiCount++;
+      else if (char === ",") commaCount++;
+    }
+  }
+
+  // Need at least 13 delimiters for 14 columns
+  if (tabCount >= 13) return "\t";
+  if (semiCount >= 13) return ";";
+  if (commaCount >= 13) return ",";
+
+  // Fall back to highest count
   if (tabCount >= semiCount && tabCount >= commaCount) return "\t";
   if (semiCount >= commaCount) return ";";
   return ",";
@@ -53,8 +136,8 @@ export function parseTxtFile(text: string): LoanRecord[] {
   const lines = text
     .trim()
     .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
+    .map((l) => l.replace(/\r$/, ""))
+    .filter((l) => l.trim().length > 0);
 
   if (lines.length < 2) {
     throw new Error(
@@ -67,11 +150,11 @@ export function parseTxtFile(text: string): LoanRecord[] {
 
   // Skip header row (index 0)
   for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(delimiter).map((c) => c.trim());
+    const cols = parseCSVLine(lines[i], delimiter);
 
     if (cols.length < 14) {
       throw new Error(
-        `Row ${i + 1} has only ${cols.length} columns, expected 14.`,
+        `Row ${i + 1} has only ${cols.length} columns, expected 14. Check your delimiter and quoting.`,
       );
     }
 

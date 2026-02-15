@@ -165,8 +165,8 @@ export default function Home() {
 
   const handleDownloadSample = useCallback(() => {
     const a = document.createElement("a");
-    a.href = "/sample_data.txt";
-    a.download = "sample_data.txt";
+    a.href = "/sample_data.csv";
+    a.download = "sample_data.csv";
     a.click();
   }, []);
 
@@ -196,7 +196,7 @@ export default function Home() {
           </div>
         </div>
         <button className="btn-sample" onClick={handleDownloadSample}>
-          📥 Download Sample TXT
+          📥 Download Sample CSV
         </button>
       </header>
 
@@ -216,11 +216,11 @@ export default function Home() {
           >
             <span className="upload-icon">📄</span>
             <div className="upload-text-main">
-              Drop your TXT file here or click to browse
+              Drop your file here or click to browse
             </div>
             <div className="upload-text-sub">
-              Supports <span>.txt</span> files — tab, semicolon, or comma
-              delimited
+              Supports <span>.csv</span> and <span>.txt</span> files — tab,
+              semicolon, or comma delimited
             </div>
             <input
               ref={fileInputRef}

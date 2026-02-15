@@ -1,0 +1,16 @@
+Reporting Date,AccountID,CCY,Outstanding,Interest Rate,Start Date,End Date,Installment,Product Type,Segment,Daerah,KodePos,Insured/Uninsured,Transactional/Non Transactional
+31/01/2025,ACC001,IDR,1000000000,9.00,15/01/2024,15/01/2026,Yes,KPR,Retail,Jakarta,10110,Insured,Transactional
+31/01/2025,ACC002,IDR,500000000,10.50,01/06/2024,01/03/2025,No,Deposito,Corporate,Bandung,40123,Uninsured,Non Transactional
+31/01/2025,ACC003,USD,800000,8.25,01/01/2023,01/07/2028,Yes,KMK,SME,Surabaya,60234,Insured,Transactional
+31/01/2025,ACC004,IDR,250000000,7.50,10/10/2024,10/02/2025,No,Tabungan,Retail,Medan,20345,Insured,Non Transactional
+31/01/2025,ACC005,IDR,2000000000,11.00,01/03/2022,01/03/2032,Yes,KI,Corporate,"Jakarta Selatan",10220,Uninsured,Transactional
+31/01/2025,ACC006,IDR,750000000,9.75,15/07/2023,15/07/2027,Yes,KPR,Retail,"Tangerang Selatan",15414,Insured,Transactional
+31/01/2025,ACC007,IDR,300000000,8.00,01/04/2024,01/10/2025,Yes,KMK,SME,"Jawa Barat",40256,Insured,Non Transactional
+31/01/2025,ACC008,USD,1200000,7.25,01/09/2022,01/09/2030,Yes,KI,Corporate,"Jakarta Pusat",10310,Uninsured,Transactional
+31/01/2025,ACC009,IDR,150000000,12.00,20/11/2024,20/05/2025,No,Deposito,Retail,Semarang,50134,Insured,Non Transactional
+31/01/2025,ACC010,IDR,4500000000,10.25,01/06/2021,01/06/2036,Yes,KI,Corporate,"Kalimantan Timur",75123,Uninsured,Transactional
+31/01/2025,ACC011,IDR,85000000,13.50,01/12/2024,01/12/2026,Yes,KTA,Retail,"Sulawesi Selatan",90222,Insured,Non Transactional
+31/01/2025,ACC012,IDR,620000000,9.00,15/03/2023,15/03/2028,Yes,KPR,Retail,"Jawa Tengah",50267,Insured,Transactional
+31/01/2025,ACC013,IDR,1800000000,8.50,01/01/2024,01/01/2029,Yes,KMK,Corporate,"Jakarta Barat",11520,Uninsured,Non Transactional
+31/01/2025,ACC014,IDR,95000000,14.00,05/08/2024,05/08/2027,Yes,KTA,Retail,"Nusa Tenggara Barat",83115,Insured,Transactional
+31/01/2025,ACC015,IDR,200000000,6.50,01/02/2025,01/04/2025,No,Deposito,Corporate,Denpasar,80235,Uninsured,Non Transactional
