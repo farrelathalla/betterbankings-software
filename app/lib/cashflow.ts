@@ -1,28 +1,75 @@
 import { LoanRecord } from "./parser";
 
-// Time bucket definitions: [label, fromMonths, toMonths]
-export const TIME_BUCKETS: [string, number, number][] = [
-  ["≤ 1 bulan", 0, 1],
-  ["1 to ≤ 3 bulan", 1, 3],
-  ["3 to ≤ 6 bulan", 3, 6],
-  ["6 to ≤ 9 bulan", 6, 9],
-  ["9 bulan to ≤ 1Y", 9, 12],
-  ["1Y to ≤ 1.5Y", 12, 18],
-  ["1.5Y to ≤ 2Y", 18, 24],
-  ["2Y to ≤ 3Y", 24, 36],
-  ["3Y to ≤ 4Y", 36, 48],
-  ["4Y to ≤ 5Y", 48, 60],
-  ["5Y to ≤ 6Y", 60, 72],
-  ["6Y to ≤ 7Y", 72, 84],
-  ["7Y to ≤ 8Y", 84, 96],
-  ["8Y to ≤ 9Y", 96, 108],
-  ["9Y to ≤ 10Y", 108, 120],
-  ["10Y to ≤ 15Y", 120, 180],
-  ["15Y to ≤ 20Y", 180, 240],
-  ["> 20Y", 240, Infinity],
+/**
+ * Cashflow engine — ported from Python calculator.py
+ *
+ * Supports:
+ *   installment=no  → bullet (interest each period, principal at maturity)
+ *   installment=yes → annuity (PMT) or flat (equal principal + fixed interest)
+ *
+ * Bucket calculations use the "flat" variants from calculator.py with special rules:
+ *   LCR interest: interest only counted for ≤30D bucket (>30D = 0)
+ *   NSFR interest: always 0
+ */
+
+// ─── Time-bucket labels (IRRBB) ──────────────────────────────
+export const IRRBB_LABELS = [
+  "≤ 1 bulan",
+  "1-3 bulan",
+  "3-6 bulan",
+  "6-9 bulan",
+  "9-12 bulan",
+  "1-1.5Y",
+  "1.5-2Y",
+  "2-3Y",
+  "3-4Y",
+  "4-5Y",
+  "5-6Y",
+  "6-7Y",
+  "7-8Y",
+  "8-9Y",
+  "9-10Y",
+  "10-15Y",
+  "15-20Y",
+  "> 20Y",
 ];
 
-export interface CashflowBBIResult {
+const IRRBB_MONTH_EDGES = [
+  1,
+  3,
+  6,
+  9,
+  12,
+  18,
+  24,
+  36,
+  48,
+  60,
+  72,
+  84,
+  96,
+  108,
+  120,
+  180,
+  240,
+  Infinity,
+];
+
+export const LCR_LABELS = ["CF ≤30D", "CF >30D"];
+export const NSFR_LABELS = ["CF <6M", "CF 6-12M", "CF >12M"];
+
+// ─── Schedule types ──────────────────────────────────────────
+interface ScheduleRow {
+  period: number;
+  paymentDate: Date;
+  payment: number;
+  principal: number;
+  interest: number;
+  remainingBalance: number;
+}
+
+// ─── Result interface (shared for BBI / Interest / Both) ─────
+export interface CashflowRow {
   // Input passthrough
   reportingDate: Date;
   accountId: string;
@@ -40,186 +87,288 @@ export interface CashflowBBIResult {
   transactional: string;
   // Computed
   remainingDays: number;
-  cf30d: number; // CF <=30D
-  cfGt30d: number; // CF >30D
-  cf6m: number; // CF <6M
-  cf6mTo12m: number; // CF 6M to 12M
-  cfGt12m: number; // CF >12M
-  buckets: number[]; // 18 time buckets
+  lcrBuckets: number[]; // [≤30D, >30D]
+  nsfrBuckets: number[]; // [<6M, 6-12M, >12M]
+  irrbbBuckets: number[]; // 18 IRRBB buckets
 }
 
-export interface InterestResult {
-  // Input passthrough
-  reportingDate: Date;
-  accountId: string;
-  ccy: string;
-  outstanding: number;
-  interestRate: number;
-  startDate: Date;
-  endDate: Date;
-  installment: string;
-  productType: string;
-  segment: string;
-  daerah: string;
-  kodePos: string;
-  insuredUninsured: string;
-  transactional: string;
-  // Computed
-  remainingDays: number;
-  cf30d: number; // CF <=30D
-  cfGt30d: number; // CF >30D
-  cf6m: number; // CF <6M
-  cf6mTo12m: number; // CF 6M to 12M
-  cfGt12m: number; // CF >12M
-  buckets: number[]; // 18 time buckets
+// ─── PMT formula (equivalent to numpy_financial.pmt) ─────────
+function pmt(rate: number, nper: number, pv: number): number {
+  if (rate === 0) return -pv / nper;
+  const factor = Math.pow(1 + rate, nper);
+  return (-pv * rate * factor) / (factor - 1);
 }
 
-function daysBetween(a: Date, b: Date): number {
-  const msPerDay = 1000 * 60 * 60 * 24;
+// ─── Helpers ─────────────────────────────────────────────────
+function daysInMonth(year: number, month: number): number {
+  return new Date(year, month, 0).getDate();
+}
+
+function monthDiff(a: Date, b: Date): number {
+  return (
+    (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth())
+  );
+}
+
+function dayDiff(a: Date, b: Date): number {
+  const msPerDay = 86400000;
   return Math.round((b.getTime() - a.getTime()) / msPerDay);
 }
 
-function roundUp(value: number, decimals: number = 0): number {
-  if (decimals === 0) {
-    return Math.ceil(value);
-  }
-  const factor = Math.pow(10, decimals);
-  return Math.ceil(value * factor) / factor;
-}
+// ─── Generate payment dates (matches Python) ─────────────────
+function generatePaymentDates(reportingDate: Date, endDate: Date): Date[] {
+  const anchorDay = endDate.getDate();
 
-export function calculateCashflowBBI(record: LoanRecord): CashflowBBIResult {
-  const remainingDays = daysBetween(record.reportingDate, record.endDate);
-  const D = record.outstanding;
-  const isInstallment = record.installment.toLowerCase() === "yes";
-  const months = roundUp(remainingDays / 30); // ROUNDUP(O/30, 0)
+  let year = reportingDate.getFullYear();
+  let month = reportingDate.getMonth() + 1; // 1-indexed
 
-  // CF <=30D
-  let cf30d: number;
-  if (isInstallment) {
-    cf30d = months > 0 ? D / months : D;
-  } else {
-    cf30d = remainingDays <= 30 ? D : 0;
-  }
-
-  // CF >30D
-  const cfGt30d = D - cf30d;
-
-  // CF <6M
-  let cf6m: number;
-  if (isInstallment) {
-    cf6m = months > 0 ? (D * Math.min(6, months)) / months : D;
-  } else {
-    cf6m = remainingDays <= 180 ? D : 0;
-  }
-
-  // CF 6M to 12M
-  let cf6mTo12m: number;
-  if (isInstallment) {
-    cf6mTo12m =
-      months > 0 ? (D * Math.max(Math.min(months, 12) - 6, 0)) / months : 0;
-  } else {
-    cf6mTo12m = remainingDays > 180 && remainingDays <= 360 ? D : 0;
-  }
-
-  // CF >12M
-  let cfGt12m: number;
-  if (isInstallment) {
-    cfGt12m = months > 0 ? (D * Math.max(months - 12, 0)) / months : 0;
-  } else {
-    cfGt12m = remainingDays > 360 ? D : 0;
-  }
-
-  // Time buckets
-  const buckets: number[] = TIME_BUCKETS.map(([, from, to]) => {
-    if (isInstallment) {
-      if (months <= 0) return 0;
-      const bucketMonths = Math.max(
-        Math.min(months, to) - Math.min(months, from),
-        0,
-      );
-      return (D * bucketMonths) / months;
-    } else {
-      // For non-installment: lump sum placed in the bucket where months falls
-      if (to === Infinity) {
-        return months > from ? D : 0;
-      }
-      return months > from && months <= to ? D : 0;
+  // Move to next month if reporting day >= anchor day
+  if (reportingDate.getDate() >= anchorDay) {
+    month++;
+    if (month > 12) {
+      month = 1;
+      year++;
     }
-  });
+  }
 
-  return {
-    reportingDate: record.reportingDate,
-    accountId: record.accountId,
-    ccy: record.ccy,
-    outstanding: D,
-    interestRate: record.interestRate,
-    startDate: record.startDate,
-    endDate: record.endDate,
-    installment: record.installment,
-    productType: record.productType,
-    segment: record.segment,
-    daerah: record.daerah,
-    kodePos: record.kodePos,
-    insuredUninsured: record.insuredUninsured,
-    transactional: record.transactional,
-    remainingDays,
-    cf30d,
-    cfGt30d,
-    cf6m,
-    cf6mTo12m,
-    cfGt12m,
-    buckets,
-  };
+  const dates: Date[] = [];
+
+  while (true) {
+    const lastDay = daysInMonth(year, month);
+    const day = Math.min(anchorDay, lastDay);
+    const d = new Date(year, month - 1, day);
+
+    if (d > endDate) break;
+    dates.push(d);
+
+    month++;
+    if (month > 12) {
+      month = 1;
+      year++;
+    }
+  }
+  return dates;
 }
 
-export function calculateInterest(
+// ─── Build amortization schedule ─────────────────────────────
+function buildSchedule(
+  loan: LoanRecord,
+  method: "annuity" | "flat",
+): ScheduleRow[] {
+  const principal = loan.outstanding;
+  const annualRate = loan.interestRate;
+  const installment = loan.installment.toLowerCase();
+  const r = annualRate / 12;
+
+  const reportingDate = loan.reportingDate;
+  const endDate = loan.endDate;
+
+  if (endDate <= reportingDate) return [];
+
+  const paymentDates = generatePaymentDates(reportingDate, endDate);
+  const periods = paymentDates.length;
+
+  if (periods === 0) return [];
+
+  const rows: ScheduleRow[] = [];
+  let balance = principal;
+
+  // ── INSTALLMENT = NO (Bullet) ──
+  if (installment === "no") {
+    const monthlyInterest = principal * r;
+    for (let i = 0; i < periods; i++) {
+      const principalPayment = i === periods - 1 ? principal : 0;
+      const interest = monthlyInterest;
+      const payment = principalPayment + interest;
+      balance -= principalPayment;
+      rows.push({
+        period: i + 1,
+        paymentDate: paymentDates[i],
+        payment: round2(payment),
+        principal: round2(principalPayment),
+        interest: round2(interest),
+        remainingBalance: round2(Math.max(balance, 0)),
+      });
+    }
+    return rows;
+  }
+
+  // ── INSTALLMENT = YES ──
+  if (installment === "yes") {
+    if (method === "annuity") {
+      const pmtVal =
+        r !== 0 ? pmt(r, periods, -principal) : principal / periods;
+      for (let i = 0; i < periods; i++) {
+        const interest = balance * r;
+        const principalPayment = pmtVal - interest;
+        balance -= principalPayment;
+        rows.push({
+          period: i + 1,
+          paymentDate: paymentDates[i],
+          payment: round2(pmtVal),
+          principal: round2(principalPayment),
+          interest: round2(interest),
+          remainingBalance: round2(Math.max(balance, 0)),
+        });
+      }
+    } else {
+      // flat
+      const monthlyPrincipal = principal / periods;
+      const monthlyInterest = principal * r;
+      const payment = monthlyPrincipal + monthlyInterest;
+      for (let i = 0; i < periods; i++) {
+        balance -= monthlyPrincipal;
+        rows.push({
+          period: i + 1,
+          paymentDate: paymentDates[i],
+          payment: round2(payment),
+          principal: round2(monthlyPrincipal),
+          interest: round2(monthlyInterest),
+          remainingBalance: round2(Math.max(balance, 0)),
+        });
+      }
+    }
+    return rows;
+  }
+
+  // Fallback: treat unknown installment as "no"
+  return [];
+}
+
+function round2(v: number): number {
+  return Math.round(v * 100) / 100;
+}
+
+// ─── Bucket: LCR flat ────────────────────────────────────────
+function getBucketLCRFlat(
+  schedule: ScheduleRow[],
+  reportingDate: Date,
+  valueType: "principal" | "interest",
+): number[] {
+  const result = [0, 0]; // [≤30D, >30D]
+  if (!schedule.length) return result;
+
+  for (const row of schedule) {
+    const days = dayDiff(reportingDate, row.paymentDate);
+    const bucketIdx = days <= 30 ? 0 : 1;
+
+    if (valueType === "principal") {
+      result[bucketIdx] += row.principal;
+    } else {
+      // Interest: only count ≤30D, >30D is 0
+      if (bucketIdx === 0) {
+        result[0] += row.interest;
+      }
+      // else: result[1] stays 0
+    }
+  }
+  return result.map(round2);
+}
+
+// ─── Bucket: NSFR flat ───────────────────────────────────────
+function getBucketNSFRFlat(
+  schedule: ScheduleRow[],
+  reportingDate: Date,
+  valueType: "principal" | "interest",
+): number[] {
+  const result = [0, 0, 0]; // [<6M, 6-12M, >12M]
+  if (!schedule.length) return result;
+
+  for (const row of schedule) {
+    const months = monthDiff(reportingDate, row.paymentDate);
+
+    let bucketIdx: number;
+    if (months < 6) bucketIdx = 0;
+    else if (months <= 12) bucketIdx = 1;
+    else bucketIdx = 2;
+
+    if (valueType === "principal") {
+      result[bucketIdx] += row.principal;
+    } else {
+      // Interest: always 0 for NSFR
+      // result stays [0, 0, 0]
+    }
+  }
+  return result.map(round2);
+}
+
+// ─── Bucket: IRRBB flat ─────────────────────────────────────
+function getBucketIRRBBFlat(
+  schedule: ScheduleRow[],
+  reportingDate: Date,
+  valueType: "principal" | "interest",
+): number[] {
+  const result = new Array(IRRBB_LABELS.length).fill(0);
+  if (!schedule.length) return result;
+
+  for (const row of schedule) {
+    const days = dayDiff(reportingDate, row.paymentDate);
+    const months = monthDiff(reportingDate, row.paymentDate);
+
+    // Determine bucket index
+    let bucketIdx: number;
+    if (days <= 30) {
+      bucketIdx = 0; // "≤ 1 bulan"
+    } else {
+      // Find bucket from MONTH_EDGES
+      bucketIdx = -1;
+      for (let i = 0; i < IRRBB_MONTH_EDGES.length - 1; i++) {
+        if (
+          months > IRRBB_MONTH_EDGES[i] &&
+          months <= IRRBB_MONTH_EDGES[i + 1]
+        ) {
+          bucketIdx = i + 1; // +1 because index 0 is "≤ 1 bulan"
+          break;
+        }
+      }
+      // Edge: months <= 1 but days > 30 → "1-3 bulan"
+      if (bucketIdx === -1) {
+        if (months <= IRRBB_MONTH_EDGES[0]) {
+          bucketIdx = 1; // "1-3 bulan"
+        } else {
+          bucketIdx = IRRBB_LABELS.length - 1; // "> 20Y"
+        }
+      }
+    }
+
+    const val = valueType === "principal" ? row.principal : row.interest;
+    if (bucketIdx >= 0 && bucketIdx < result.length) {
+      result[bucketIdx] += val;
+    }
+  }
+  return result.map(round2);
+}
+
+// ─── Process a single record ─────────────────────────────────
+function processOneRecord(
   record: LoanRecord,
-  bbiResult: CashflowBBIResult,
-): InterestResult {
-  const D = record.outstanding;
-  const E = record.interestRate; // already decimal
-  const remainingDays = bbiResult.remainingDays;
+  method: "annuity" | "flat",
+  valueType: "principal" | "interest",
+): CashflowRow {
+  const schedule = buildSchedule(record, method);
+  const remainingDays = dayDiff(record.reportingDate, record.endDate);
 
-  // CF <=30D: E * (D / 12)
-  const cf30d = E * (D / 12);
-
-  // CF >30D through CF >12M are zero
-  const cfGt30d = 0;
-  const cf6m = 0;
-  const cf6mTo12m = 0;
-  const cfGt12m = 0;
-
-  // Time buckets for interest
-  // Each bucket uses: (Outstanding - sum of BBI buckets up to this point) * (rate/12) * bucketSpanMonths
-  const bbiBuckets = bbiResult.buckets;
-  const buckets: number[] = [];
-
-  let cumulativeBBI = 0;
-
-  for (let i = 0; i < TIME_BUCKETS.length; i++) {
-    const [, from, to] = TIME_BUCKETS[i];
-    const spanMonths = to === Infinity ? 0 : to - from; // >20Y gets 0
-
-    if (i === 0) {
-      // ≤ 1 bulan: D * (E/12)
-      buckets.push(D * (E / 12));
-    } else {
-      // Remaining principal after previous buckets' BBI cashflows
-      const remainingPrincipal = D - cumulativeBBI;
-      if (spanMonths > 0 && remainingPrincipal > 0) {
-        buckets.push(remainingPrincipal * (E / 12) * spanMonths);
-      } else {
-        buckets.push(0);
-      }
-    }
-    cumulativeBBI += bbiBuckets[i];
-  }
+  const lcrBuckets = getBucketLCRFlat(
+    schedule,
+    record.reportingDate,
+    valueType,
+  );
+  const nsfrBuckets = getBucketNSFRFlat(
+    schedule,
+    record.reportingDate,
+    valueType,
+  );
+  const irrbbBuckets = getBucketIRRBBFlat(
+    schedule,
+    record.reportingDate,
+    valueType,
+  );
 
   return {
     reportingDate: record.reportingDate,
     accountId: record.accountId,
     ccy: record.ccy,
-    outstanding: D,
+    outstanding: record.outstanding,
     interestRate: record.interestRate,
     startDate: record.startDate,
     endDate: record.endDate,
@@ -231,22 +380,40 @@ export function calculateInterest(
     insuredUninsured: record.insuredUninsured,
     transactional: record.transactional,
     remainingDays,
-    cf30d,
-    cfGt30d,
-    cf6m,
-    cf6mTo12m,
-    cfGt12m,
-    buckets,
+    lcrBuckets,
+    nsfrBuckets,
+    irrbbBuckets,
   };
 }
 
-export function processRecords(records: LoanRecord[]): {
-  bbiResults: CashflowBBIResult[];
-  interestResults: InterestResult[];
-} {
-  const bbiResults = records.map((r) => calculateCashflowBBI(r));
-  const interestResults = records.map((r, i) =>
-    calculateInterest(r, bbiResults[i]),
-  );
-  return { bbiResults, interestResults };
+// ─── Sum two cashflow rows (for "Both" mode) ─────────────────
+function sumCashflowRows(a: CashflowRow, b: CashflowRow): CashflowRow {
+  return {
+    ...a, // passthrough fields from first (same record)
+    lcrBuckets: a.lcrBuckets.map((v, i) => round2(v + b.lcrBuckets[i])),
+    nsfrBuckets: a.nsfrBuckets.map((v, i) => round2(v + b.nsfrBuckets[i])),
+    irrbbBuckets: a.irrbbBuckets.map((v, i) => round2(v + b.irrbbBuckets[i])),
+  };
+}
+
+// ─── Main entry: process all records ─────────────────────────
+export type FilterType = "bbi" | "interest" | "both";
+
+export function processRecords(
+  records: LoanRecord[],
+  method: "annuity" | "flat",
+  filter: FilterType,
+): CashflowRow[] {
+  if (filter === "bbi") {
+    return records.map((r) => processOneRecord(r, method, "principal"));
+  }
+  if (filter === "interest") {
+    return records.map((r) => processOneRecord(r, method, "interest"));
+  }
+  // "both" → sum principal + interest per record
+  return records.map((r) => {
+    const bbi = processOneRecord(r, method, "principal");
+    const interest = processOneRecord(r, method, "interest");
+    return sumCashflowRows(bbi, interest);
+  });
 }
