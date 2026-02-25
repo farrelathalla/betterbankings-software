@@ -1,6 +1,12 @@
 "use client";
 
-import React, { useState, useCallback, useRef, useMemo } from "react";
+import React, {
+  useState,
+  useCallback,
+  useRef,
+  useMemo,
+  useEffect,
+} from "react";
 import { parseTxtFile, LoanRecord } from "./lib/parser";
 import {
   processRecords,
@@ -141,6 +147,13 @@ const INPUT_COLUMNS: ColDef[] = [
     type: "input",
     getValue: (r) => r.transactional,
   },
+  {
+    key: "method",
+    label: "Method",
+    group: "Input",
+    type: "input",
+    getValue: (r) => r.method,
+  },
 ];
 
 const REMDAYS_COLUMN: ColDef = {
@@ -203,6 +216,7 @@ const PIVOTABLE_KEYS = [
   "kodePos",
   "insuredUninsured",
   "transactional",
+  "method",
 ];
 
 // Columns that are numeric → get summed in pivot
@@ -214,6 +228,246 @@ const NUMERIC_KEYS = new Set([
   ...NSFR_COLUMNS.map((c) => c.key),
   ...IRRBB_COLUMNS.map((c) => c.key),
 ]);
+
+/* ============================================================ */
+/*  COLUMN FILTER TYPES & HELPERS                               */
+/* ============================================================ */
+interface ColumnFilterState {
+  selectedValues: Set<string>;
+  sortDirection: "asc" | "desc" | null;
+  searchText: string;
+  numberMin: string;
+  numberMax: string;
+}
+
+function getDefaultFilterState(): ColumnFilterState {
+  return {
+    selectedValues: new Set<string>(),
+    sortDirection: null,
+    searchText: "",
+    numberMin: "",
+    numberMax: "",
+  };
+}
+
+function isFilterActive(
+  fs: ColumnFilterState | undefined,
+  allValues: string[],
+): boolean {
+  if (!fs) return false;
+  if (fs.sortDirection !== null) return true;
+  if (fs.numberMin !== "" || fs.numberMax !== "") return true;
+  if (fs.selectedValues.size > 0 && fs.selectedValues.size < allValues.length)
+    return true;
+  return false;
+}
+
+/* ============================================================ */
+/*  FILTER DROPDOWN COMPONENT                                   */
+/* ============================================================ */
+function FilterDropdown({
+  colKey,
+  colLabel,
+  isNumeric,
+  allValues,
+  filterState,
+  onApply,
+  onClose,
+}: {
+  colKey: string;
+  colLabel: string;
+  isNumeric: boolean;
+  allValues: string[];
+  filterState: ColumnFilterState;
+  onApply: (key: string, state: ColumnFilterState) => void;
+  onClose: () => void;
+}) {
+  const [localState, setLocalState] = useState<ColumnFilterState>(() => ({
+    ...filterState,
+    selectedValues: new Set(
+      filterState.selectedValues.size > 0
+        ? filterState.selectedValues
+        : allValues,
+    ),
+  }));
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(e.target as Node)
+      ) {
+        onClose();
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [onClose]);
+
+  const filteredValues = allValues.filter((v) =>
+    v.toLowerCase().includes(localState.searchText.toLowerCase()),
+  );
+
+  const allSelected = filteredValues.every((v) =>
+    localState.selectedValues.has(v),
+  );
+
+  const toggleSelectAll = () => {
+    setLocalState((prev) => {
+      const next = new Set(prev.selectedValues);
+      if (allSelected) {
+        filteredValues.forEach((v) => next.delete(v));
+      } else {
+        filteredValues.forEach((v) => next.add(v));
+      }
+      return { ...prev, selectedValues: next };
+    });
+  };
+
+  const toggleValue = (val: string) => {
+    setLocalState((prev) => {
+      const next = new Set(prev.selectedValues);
+      next.has(val) ? next.delete(val) : next.add(val);
+      return { ...prev, selectedValues: next };
+    });
+  };
+
+  const handleApply = () => {
+    // If all values selected, treat as "no filter"
+    const finalState = { ...localState };
+    if (finalState.selectedValues.size === allValues.length) {
+      finalState.selectedValues = new Set<string>();
+    }
+    onApply(colKey, finalState);
+    onClose();
+  };
+
+  const handleClear = () => {
+    onApply(colKey, getDefaultFilterState());
+    onClose();
+  };
+
+  return (
+    <div
+      className="filter-dropdown"
+      ref={dropdownRef}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="filter-dropdown-header">
+        <span className="filter-dropdown-title">Filter: {colLabel}</span>
+        <button className="filter-dropdown-close" onClick={onClose}>
+          ✕
+        </button>
+      </div>
+
+      {/* Sort */}
+      <div className="filter-dropdown-sort">
+        <button
+          className={`filter-sort-btn ${localState.sortDirection === "asc" ? "active" : ""}`}
+          onClick={() =>
+            setLocalState((prev) => ({
+              ...prev,
+              sortDirection: prev.sortDirection === "asc" ? null : "asc",
+            }))
+          }
+        >
+          ↑ Sort A→Z
+        </button>
+        <button
+          className={`filter-sort-btn ${localState.sortDirection === "desc" ? "active" : ""}`}
+          onClick={() =>
+            setLocalState((prev) => ({
+              ...prev,
+              sortDirection: prev.sortDirection === "desc" ? null : "desc",
+            }))
+          }
+        >
+          ↓ Sort Z→A
+        </button>
+      </div>
+
+      {/* Number range (numeric columns only) */}
+      {isNumeric && (
+        <div className="filter-dropdown-range">
+          <span className="filter-range-label">Range:</span>
+          <input
+            type="text"
+            placeholder="Min"
+            className="filter-range-input"
+            value={localState.numberMin}
+            onChange={(e) =>
+              setLocalState((prev) => ({ ...prev, numberMin: e.target.value }))
+            }
+          />
+          <span className="filter-range-sep">–</span>
+          <input
+            type="text"
+            placeholder="Max"
+            className="filter-range-input"
+            value={localState.numberMax}
+            onChange={(e) =>
+              setLocalState((prev) => ({ ...prev, numberMax: e.target.value }))
+            }
+          />
+        </div>
+      )}
+
+      {/* Search */}
+      <div className="filter-dropdown-search">
+        <input
+          type="text"
+          placeholder="Search values..."
+          className="filter-search-input"
+          value={localState.searchText}
+          onChange={(e) =>
+            setLocalState((prev) => ({ ...prev, searchText: e.target.value }))
+          }
+        />
+      </div>
+
+      {/* Select all */}
+      <div className="filter-dropdown-selectall">
+        <label className="filter-checkbox-label">
+          <input
+            type="checkbox"
+            checked={allSelected}
+            onChange={toggleSelectAll}
+          />
+          <span>(Select All)</span>
+        </label>
+      </div>
+
+      {/* Value list */}
+      <div className="filter-dropdown-values">
+        {filteredValues.map((val) => (
+          <label key={val} className="filter-checkbox-label">
+            <input
+              type="checkbox"
+              checked={localState.selectedValues.has(val)}
+              onChange={() => toggleValue(val)}
+            />
+            <span>{val || "(blank)"}</span>
+          </label>
+        ))}
+        {filteredValues.length === 0 && (
+          <div className="filter-no-values">No matching values</div>
+        )}
+      </div>
+
+      {/* Actions */}
+      <div className="filter-dropdown-actions">
+        <button className="filter-action-clear" onClick={handleClear}>
+          Clear
+        </button>
+        <button className="filter-action-apply" onClick={handleApply}>
+          Apply
+        </button>
+      </div>
+    </div>
+  );
+}
 
 /* ============================================================ */
 /*  COLUMN SELECTOR COMPONENT                                   */
@@ -373,6 +627,93 @@ function aggregateRows(rows: CashflowRow[]): Record<string, number> {
   return sums;
 }
 
+/* Collect all leaf groups from the pivot tree */
+function collectLeafGroups(
+  groups: PivotGroup[],
+  pivotKeys: string[],
+  depth: number,
+  parentKeys: Record<string, string>,
+): { combinedKeys: Record<string, string>; rows: CashflowRow[] }[] {
+  const results: {
+    combinedKeys: Record<string, string>;
+    rows: CashflowRow[];
+  }[] = [];
+  const key = pivotKeys[depth];
+
+  for (const group of groups) {
+    const currentKeys = { ...parentKeys, [key]: group.keys[key] };
+
+    if (depth === pivotKeys.length - 1 || group.children.length === 0) {
+      // This is a leaf
+      results.push({ combinedKeys: currentKeys, rows: group.rows });
+    } else {
+      results.push(
+        ...collectLeafGroups(group.children, pivotKeys, depth + 1, currentKeys),
+      );
+    }
+  }
+  return results;
+}
+
+/* ============================================================ */
+/*  FILTERABLE HEADER CELL                                      */
+/* ============================================================ */
+function FilterableHeader({
+  col,
+  className,
+  data,
+  columnFilters,
+  onApplyFilter,
+}: {
+  col: ColDef;
+  className: string;
+  data: CashflowRow[];
+  columnFilters: Record<string, ColumnFilterState>;
+  onApplyFilter: (key: string, state: ColumnFilterState) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const allValues = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of data) {
+      set.add(String(col.getValue(row)));
+    }
+    return Array.from(set).sort();
+  }, [data, col]);
+
+  const isActive = isFilterActive(columnFilters[col.key], allValues);
+  const isNum = NUMERIC_KEYS.has(col.key);
+
+  return (
+    <th className={`${className} filterable-header`}>
+      <div className="filter-header-content">
+        <span>{col.label}</span>
+        <button
+          className={`filter-header-btn ${isActive ? "active" : ""}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen(!open);
+          }}
+          title="Filter this column"
+        >
+          ▼
+        </button>
+      </div>
+      {open && (
+        <FilterDropdown
+          colKey={col.key}
+          colLabel={col.label}
+          isNumeric={isNum}
+          allValues={allValues}
+          filterState={columnFilters[col.key] || getDefaultFilterState()}
+          onApply={onApplyFilter}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </th>
+  );
+}
+
 /* ============================================================ */
 /*  PIVOT TABLE COMPONENT                                       */
 /* ============================================================ */
@@ -380,12 +721,18 @@ function PivotTable({
   data,
   visibleColumns,
   pivotRows,
+  pivotDisplayMode,
   onDrillDown,
+  columnFilters,
+  onApplyFilter,
 }: {
   data: CashflowRow[];
   visibleColumns: Set<string>;
   pivotRows: string[];
+  pivotDisplayMode: "nested" | "flat";
   onDrillDown: (filters: Record<string, string>) => void;
+  columnFilters: Record<string, ColumnFilterState>;
+  onApplyFilter: (key: string, state: ColumnFilterState) => void;
 }) {
   const visibleCols = ALL_COLUMNS.filter((c) => visibleColumns.has(c.key));
   const resultCols = visibleCols.filter((c) => NUMERIC_KEYS.has(c.key));
@@ -414,12 +761,14 @@ function PivotTable({
           <thead>
             <tr>
               {visibleCols.map((col, i) => (
-                <th
+                <FilterableHeader
                   key={col.key}
+                  col={col}
                   className={getGroupBorderClass(col, visibleCols, i)}
-                >
-                  {col.label}
-                </th>
+                  data={data}
+                  columnFilters={columnFilters}
+                  onApplyFilter={onApplyFilter}
+                />
               ))}
             </tr>
           </thead>
@@ -451,7 +800,87 @@ function PivotTable({
     );
   }
 
-  // Pivot table
+  // Pivot table — FLAT mode
+  if (pivotDisplayMode === "flat") {
+    const pivotCols = pivotRows
+      .map((k) => ALL_COLUMNS.find((c) => c.key === k)!)
+      .filter(Boolean);
+
+    const leafGroups = collectLeafGroups(groups, pivotRows, 0, {});
+
+    return (
+      <div className="table-wrapper">
+        <table className="data-table pivot-table">
+          <thead>
+            <tr>
+              {pivotCols.map((col) => (
+                <FilterableHeader
+                  key={col.key}
+                  col={col}
+                  className=""
+                  data={data}
+                  columnFilters={columnFilters}
+                  onApplyFilter={onApplyFilter}
+                />
+              ))}
+              <th className="col-separator">Count</th>
+              {resultCols.map((col, i) => (
+                <FilterableHeader
+                  key={col.key}
+                  col={col}
+                  className={
+                    i === 0
+                      ? "col-separator"
+                      : getGroupBorderClass(col, resultCols, i)
+                  }
+                  data={data}
+                  columnFilters={columnFilters}
+                  onApplyFilter={onApplyFilter}
+                />
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {leafGroups.map((leaf, idx) => {
+              const agg = aggregateRows(leaf.rows);
+              return (
+                <tr key={idx}>
+                  {pivotCols.map((pc) => (
+                    <td key={pc.key} className="pivot-flat-cell">
+                      <button
+                        className="pivot-group-value"
+                        onClick={() => onDrillDown(leaf.combinedKeys)}
+                        title="Click to drill down"
+                      >
+                        {leaf.combinedKeys[pc.key] || "-"}
+                      </button>
+                    </td>
+                  ))}
+                  <td className="col-separator pivot-agg-cell">
+                    {leaf.rows.length}
+                  </td>
+                  {resultCols.map((rc, i) => (
+                    <td
+                      key={rc.key}
+                      className={`pivot-agg-cell ${i === 0 ? "col-separator" : ""}`}
+                    >
+                      {rc.key === "interestRate"
+                        ? formatPercent(agg[rc.key] / leaf.rows.length)
+                        : rc.key === "remainingDays"
+                          ? Math.round(agg[rc.key])
+                          : formatNumber(agg[rc.key])}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  // Pivot table — NESTED mode (existing)
   const pivotCols = pivotRows
     .map((k) => ALL_COLUMNS.find((c) => c.key === k)!)
     .filter(Boolean);
@@ -528,7 +957,14 @@ function PivotTable({
               Grouped By
             </th>
             {resultCols.map((col) => (
-              <th key={col.key}>{col.label}</th>
+              <FilterableHeader
+                key={col.key}
+                col={col}
+                className=""
+                data={data}
+                columnFilters={columnFilters}
+                onApplyFilter={onApplyFilter}
+              />
             ))}
           </tr>
         </thead>
@@ -556,7 +992,6 @@ export default function Home() {
   const [records, setRecords] = useState<LoanRecord[]>([]);
   const [results, setResults] = useState<CashflowRow[]>([]);
   const [filter, setFilter] = useState<FilterType>("both");
-  const [method, setMethod] = useState<"annuity" | "flat">("annuity");
   const [error, setError] = useState<string | null>(null);
   const [processed, setProcessed] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -569,6 +1004,16 @@ export default function Home() {
 
   // Pivot row fields
   const [pivotRows, setPivotRows] = useState<string[]>([]);
+
+  // Pivot display mode
+  const [pivotDisplayMode, setPivotDisplayMode] = useState<"nested" | "flat">(
+    "nested",
+  );
+
+  // Column filters
+  const [columnFilters, setColumnFilters] = useState<
+    Record<string, ColumnFilterState>
+  >({});
 
   const handleFile = useCallback(async (f: File) => {
     setFile(f);
@@ -594,35 +1039,24 @@ export default function Home() {
       const text = await file.text();
       const parsed = parseTxtFile(text);
       setRecords(parsed);
-      const res = processRecords(parsed, method, filter);
+      const res = processRecords(parsed, filter);
       setResults(res);
       setProcessed(true);
     } catch (err) {
       setError((err as Error).message);
     }
-  }, [file, method, filter]);
+  }, [file, filter]);
 
-  // Re-process when filter/method changes (if already processed)
+  // Re-process when filter changes (if already processed)
   const handleFilterChange = useCallback(
     (f: FilterType) => {
       setFilter(f);
       if (records.length > 0) {
-        const res = processRecords(records, method, f);
+        const res = processRecords(records, f);
         setResults(res);
       }
     },
-    [records, method],
-  );
-
-  const handleMethodChange = useCallback(
-    (m: "annuity" | "flat") => {
-      setMethod(m);
-      if (records.length > 0) {
-        const res = processRecords(records, m, filter);
-        setResults(res);
-      }
-    },
-    [records, filter],
+    [records],
   );
 
   const handleDownloadSample = useCallback(() => {
@@ -638,6 +1072,7 @@ export default function Home() {
     setResults([]);
     setProcessed(false);
     setError(null);
+    setColumnFilters({});
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
 
@@ -661,6 +1096,85 @@ export default function Home() {
     });
   }, []);
 
+  const handleApplyFilter = useCallback(
+    (key: string, state: ColumnFilterState) => {
+      setColumnFilters((prev) => {
+        const next = { ...prev };
+        // If everything is default, remove the entry
+        if (
+          state.selectedValues.size === 0 &&
+          state.sortDirection === null &&
+          state.numberMin === "" &&
+          state.numberMax === ""
+        ) {
+          delete next[key];
+        } else {
+          next[key] = state;
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  // Apply column filters and sorting to results
+  const filteredResults = useMemo(() => {
+    let data = [...results];
+
+    // Apply value filters and number range filters
+    for (const [key, fs] of Object.entries(columnFilters)) {
+      const col = ALL_COLUMNS.find((c) => c.key === key);
+      if (!col) continue;
+
+      // Value filter
+      if (fs.selectedValues.size > 0) {
+        data = data.filter((row) => {
+          const val = String(col.getValue(row));
+          return fs.selectedValues.has(val);
+        });
+      }
+
+      // Number range filter
+      if (NUMERIC_KEYS.has(key)) {
+        if (fs.numberMin !== "") {
+          const min = parseFloat(fs.numberMin);
+          if (!isNaN(min)) {
+            data = data.filter((row) => (col.getValue(row) as number) >= min);
+          }
+        }
+        if (fs.numberMax !== "") {
+          const max = parseFloat(fs.numberMax);
+          if (!isNaN(max)) {
+            data = data.filter((row) => (col.getValue(row) as number) <= max);
+          }
+        }
+      }
+    }
+
+    // Apply sorting (last sort wins — apply in reverse order of keys)
+    const sortEntries = Object.entries(columnFilters).filter(
+      ([, fs]) => fs.sortDirection !== null,
+    );
+    if (sortEntries.length > 0) {
+      // Use the last-applied sort
+      const [sortKey, sortFs] = sortEntries[sortEntries.length - 1];
+      const sortCol = ALL_COLUMNS.find((c) => c.key === sortKey);
+      if (sortCol && sortFs.sortDirection) {
+        const dir = sortFs.sortDirection === "asc" ? 1 : -1;
+        data.sort((a, b) => {
+          const va = sortCol.getValue(a);
+          const vb = sortCol.getValue(b);
+          if (typeof va === "number" && typeof vb === "number") {
+            return (va - vb) * dir;
+          }
+          return String(va).localeCompare(String(vb)) * dir;
+        });
+      }
+    }
+
+    return data;
+  }, [results, columnFilters]);
+
   // Drill-down: open new page with filters
   const handleDrillDown = useCallback(
     (filters: Record<string, string>) => {
@@ -668,7 +1182,7 @@ export default function Home() {
       sessionStorage.setItem(
         "bb_drilldown_data",
         JSON.stringify(
-          results.map((r) => ({
+          filteredResults.map((r) => ({
             ...r,
             reportingDate: r.reportingDate.toISOString(),
             startDate: r.startDate.toISOString(),
@@ -683,19 +1197,19 @@ export default function Home() {
       );
       window.open("/drilldown", "_blank");
     },
-    [results, visibleColumns],
+    [filteredResults, visibleColumns],
   );
 
   // Excel export
   const handleExportExcel = useCallback(() => {
-    if (!results.length) return;
+    if (!filteredResults.length) return;
 
     const visibleCols = ALL_COLUMNS.filter((c) => visibleColumns.has(c.key));
 
     // Check if pivot mode
     if (pivotRows.length > 0) {
       // Export pivot data
-      const groups = buildPivotGroups(results, pivotRows);
+      const groups = buildPivotGroups(filteredResults, pivotRows);
       const pivotCols = pivotRows.map(
         (k) => ALL_COLUMNS.find((c) => c.key === k)!,
       );
@@ -705,7 +1219,6 @@ export default function Home() {
 
       const addGroup = (group: PivotGroup, depth: number) => {
         const key = pivotRows[depth];
-        const col = ALL_COLUMNS.find((c) => c.key === key)!;
         const agg = aggregateRows(group.rows);
 
         const row: Record<string, string | number> = {};
@@ -731,7 +1244,7 @@ export default function Home() {
       XLSX.writeFile(wb, "cashflow_pivot.xlsx");
     } else {
       // Export raw data
-      const exportRows = results.map((row) => {
+      const exportRows = filteredResults.map((row) => {
         const obj: Record<string, string | number> = {};
         for (const col of visibleCols) {
           const val = col.getValue(row);
@@ -745,7 +1258,7 @@ export default function Home() {
       XLSX.utils.book_append_sheet(wb, ws, "Cashflow");
       XLSX.writeFile(wb, "cashflow_output.xlsx");
     }
-  }, [results, visibleColumns, pivotRows]);
+  }, [filteredResults, visibleColumns, pivotRows]);
 
   /* Stats */
   const totalOutstanding = records.reduce((s, r) => s + r.outstanding, 0);
@@ -756,6 +1269,8 @@ export default function Home() {
     interest: "Installment Interest",
     both: "Combined (BBI + Interest)",
   };
+
+  const activeFilterCount = Object.keys(columnFilters).length;
 
   return (
     <>
@@ -834,25 +1349,6 @@ export default function Home() {
         {/* CONTROLS */}
         <div className="controls-bar">
           <div className="controls-left">
-            {/* Method toggle */}
-            <div className="method-group">
-              <span className="method-label">Method:</span>
-              <div className="filter-group">
-                <button
-                  className={`filter-btn ${method === "annuity" ? "active" : ""}`}
-                  onClick={() => handleMethodChange("annuity")}
-                >
-                  Annuity
-                </button>
-                <button
-                  className={`filter-btn ${method === "flat" ? "active" : ""}`}
-                  onClick={() => handleMethodChange("flat")}
-                >
-                  Flat
-                </button>
-              </div>
-            </div>
-
             {/* Filter toggle */}
             <div className="filter-group">
               <button
@@ -877,6 +1373,15 @@ export default function Home() {
           </div>
 
           <div className="controls-right">
+            {activeFilterCount > 0 && (
+              <button
+                className="btn-clear-filters"
+                onClick={() => setColumnFilters({})}
+                title="Clear all column filters"
+              >
+                ✕ Clear Filters ({activeFilterCount})
+              </button>
+            )}
             {processed && results.length > 0 && (
               <button className="btn-export" onClick={handleExportExcel}>
                 📥 Export Excel
@@ -915,12 +1420,9 @@ export default function Home() {
               </div>
             </div>
             <div className="stat-card">
-              <div className="stat-label">Method</div>
-              <div
-                className="stat-value small"
-                style={{ textTransform: "capitalize" }}
-              >
-                {method}
+              <div className="stat-label">Showing</div>
+              <div className="stat-value small">
+                {filteredResults.length} / {results.length} rows
               </div>
             </div>
           </div>
@@ -943,15 +1445,39 @@ export default function Home() {
                   {filter === "both" ? "BBI + Interest" : filter.toUpperCase()}
                 </span>
                 {pivotRows.length > 0 && (
-                  <span className="results-badge pivot-badge">Pivot Mode</span>
+                  <>
+                    <span className="results-badge pivot-badge">
+                      Pivot Mode
+                    </span>
+                    <button
+                      className="pivot-display-toggle"
+                      onClick={() =>
+                        setPivotDisplayMode((prev) =>
+                          prev === "nested" ? "flat" : "nested",
+                        )
+                      }
+                      title={
+                        pivotDisplayMode === "nested"
+                          ? "Switch to flat table view"
+                          : "Switch to nested tree view"
+                      }
+                    >
+                      {pivotDisplayMode === "nested"
+                        ? "⊞ Flat View"
+                        : "⊟ Nested View"}
+                    </button>
+                  </>
                 )}
               </div>
 
               <PivotTable
-                data={results}
+                data={filteredResults}
                 visibleColumns={visibleColumns}
                 pivotRows={pivotRows}
+                pivotDisplayMode={pivotDisplayMode}
                 onDrillDown={handleDrillDown}
+                columnFilters={columnFilters}
+                onApplyFilter={handleApplyFilter}
               />
             </div>
           </div>

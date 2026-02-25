@@ -13,6 +13,7 @@ export interface LoanRecord {
   kodePos: string;
   insuredUninsured: string;
   transactional: string;
+  method: "annuity" | "flat";
 }
 
 function parseDate(dateStr: string): Date {
@@ -121,10 +122,10 @@ export function detectDelimiter(text: string): string {
     }
   }
 
-  // Need at least 13 delimiters for 14 columns
-  if (tabCount >= 13) return "\t";
-  if (semiCount >= 13) return ";";
-  if (commaCount >= 13) return ",";
+  // Need at least 14 delimiters for 15 columns
+  if (tabCount >= 14) return "\t";
+  if (semiCount >= 14) return ";";
+  if (commaCount >= 14) return ",";
 
   // Fall back to highest count
   if (tabCount >= semiCount && tabCount >= commaCount) return "\t";
@@ -152,13 +153,17 @@ export function parseTxtFile(text: string): LoanRecord[] {
   for (let i = 1; i < lines.length; i++) {
     const cols = parseCSVLine(lines[i], delimiter);
 
-    if (cols.length < 14) {
+    if (cols.length < 15) {
       throw new Error(
-        `Row ${i + 1} has only ${cols.length} columns, expected 14. Check your delimiter and quoting.`,
+        `Row ${i + 1} has only ${cols.length} columns, expected 15. Check your delimiter and quoting.`,
       );
     }
 
     try {
+      const methodRaw = cols[14].trim().toLowerCase();
+      const method: "annuity" | "flat" =
+        methodRaw === "flat" ? "flat" : "annuity";
+
       const record: LoanRecord = {
         reportingDate: parseDate(cols[0]),
         accountId: cols[1],
@@ -174,6 +179,7 @@ export function parseTxtFile(text: string): LoanRecord[] {
         kodePos: cols[11],
         insuredUninsured: cols[12],
         transactional: cols[13],
+        method,
       };
       records.push(record);
     } catch (err) {

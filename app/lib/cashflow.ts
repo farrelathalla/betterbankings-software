@@ -85,6 +85,7 @@ export interface CashflowRow {
   kodePos: string;
   insuredUninsured: string;
   transactional: string;
+  method: string;
   // Computed
   remainingDays: number;
   lcrBuckets: number[]; // [≤30D, >30D]
@@ -151,10 +152,8 @@ function generatePaymentDates(reportingDate: Date, endDate: Date): Date[] {
 }
 
 // ─── Build amortization schedule ─────────────────────────────
-function buildSchedule(
-  loan: LoanRecord,
-  method: "annuity" | "flat",
-): ScheduleRow[] {
+function buildSchedule(loan: LoanRecord): ScheduleRow[] {
+  const method = loan.method;
   const principal = loan.outstanding;
   const annualRate = loan.interestRate;
   const installment = loan.installment.toLowerCase();
@@ -342,10 +341,9 @@ function getBucketIRRBBFlat(
 // ─── Process a single record ─────────────────────────────────
 function processOneRecord(
   record: LoanRecord,
-  method: "annuity" | "flat",
   valueType: "principal" | "interest",
 ): CashflowRow {
-  const schedule = buildSchedule(record, method);
+  const schedule = buildSchedule(record);
   const remainingDays = dayDiff(record.reportingDate, record.endDate);
 
   const lcrBuckets = getBucketLCRFlat(
@@ -379,6 +377,7 @@ function processOneRecord(
     kodePos: record.kodePos,
     insuredUninsured: record.insuredUninsured,
     transactional: record.transactional,
+    method: record.method,
     remainingDays,
     lcrBuckets,
     nsfrBuckets,
@@ -401,19 +400,18 @@ export type FilterType = "bbi" | "interest" | "both";
 
 export function processRecords(
   records: LoanRecord[],
-  method: "annuity" | "flat",
   filter: FilterType,
 ): CashflowRow[] {
   if (filter === "bbi") {
-    return records.map((r) => processOneRecord(r, method, "principal"));
+    return records.map((r) => processOneRecord(r, "principal"));
   }
   if (filter === "interest") {
-    return records.map((r) => processOneRecord(r, method, "interest"));
+    return records.map((r) => processOneRecord(r, "interest"));
   }
   // "both" → sum principal + interest per record
   return records.map((r) => {
-    const bbi = processOneRecord(r, method, "principal");
-    const interest = processOneRecord(r, method, "interest");
+    const bbi = processOneRecord(r, "principal");
+    const interest = processOneRecord(r, "interest");
     return sumCashflowRows(bbi, interest);
   });
 }
