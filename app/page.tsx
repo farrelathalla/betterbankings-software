@@ -7,6 +7,7 @@ import React, {
   useMemo,
   useEffect,
 } from "react";
+import ReactDOM from "react-dom";
 import { parseTxtFile, LoanRecord } from "./lib/parser";
 import {
   processRecords,
@@ -273,6 +274,8 @@ function FilterDropdown({
   filterState,
   onApply,
   onClose,
+  posTop,
+  posLeft,
 }: {
   colKey: string;
   colLabel: string;
@@ -281,6 +284,8 @@ function FilterDropdown({
   filterState: ColumnFilterState;
   onApply: (key: string, state: ColumnFilterState) => void;
   onClose: () => void;
+  posTop: number;
+  posLeft: number;
 }) {
   const [localState, setLocalState] = useState<ColumnFilterState>(() => ({
     ...filterState,
@@ -353,6 +358,7 @@ function FilterDropdown({
     <div
       className="filter-dropdown"
       ref={dropdownRef}
+      style={{ top: posTop, left: posLeft }}
       onClick={(e) => e.stopPropagation()}
     >
       <div className="filter-dropdown-header">
@@ -672,6 +678,13 @@ function FilterableHeader({
   onApplyFilter: (key: string, state: ColumnFilterState) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number }>(
+    {
+      top: 0,
+      left: 0,
+    },
+  );
 
   const allValues = useMemo(() => {
     const set = new Set<string>();
@@ -684,32 +697,49 @@ function FilterableHeader({
   const isActive = isFilterActive(columnFilters[col.key], allValues);
   const isNum = NUMERIC_KEYS.has(col.key);
 
+  const handleToggle = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!open && btnRef.current) {
+        const rect = btnRef.current.getBoundingClientRect();
+        setDropdownPos({
+          top: rect.bottom + 4,
+          left: Math.max(8, rect.right - 260),
+        });
+      }
+      setOpen(!open);
+    },
+    [open],
+  );
+
   return (
     <th className={`${className} filterable-header`}>
       <div className="filter-header-content">
         <span>{col.label}</span>
         <button
+          ref={btnRef}
           className={`filter-header-btn ${isActive ? "active" : ""}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            setOpen(!open);
-          }}
+          onClick={handleToggle}
           title="Filter this column"
         >
           ▼
         </button>
       </div>
-      {open && (
-        <FilterDropdown
-          colKey={col.key}
-          colLabel={col.label}
-          isNumeric={isNum}
-          allValues={allValues}
-          filterState={columnFilters[col.key] || getDefaultFilterState()}
-          onApply={onApplyFilter}
-          onClose={() => setOpen(false)}
-        />
-      )}
+      {open &&
+        ReactDOM.createPortal(
+          <FilterDropdown
+            colKey={col.key}
+            colLabel={col.label}
+            isNumeric={isNum}
+            allValues={allValues}
+            filterState={columnFilters[col.key] || getDefaultFilterState()}
+            onApply={onApplyFilter}
+            onClose={() => setOpen(false)}
+            posTop={dropdownPos.top}
+            posLeft={dropdownPos.left}
+          />,
+          document.body,
+        )}
     </th>
   );
 }
@@ -1205,50 +1235,76 @@ export default function Home() {
     if (!filteredResults.length) return;
 
     const visibleCols = ALL_COLUMNS.filter((c) => visibleColumns.has(c.key));
+    const fLabel = filterLabel[filter];
+
+    // Helper: safely convert any value to a plain string/number for xlsx
+    const safeVal = (val: string | number): string | number => {
+      if ((val as unknown) instanceof Date) {
+        return formatDate(val as unknown as Date);
+      }
+      return val;
+    };
 
     // Check if pivot mode
     if (pivotRows.length > 0) {
-      // Export pivot data
-      const groups = buildPivotGroups(filteredResults, pivotRows);
       const pivotCols = pivotRows.map(
         (k) => ALL_COLUMNS.find((c) => c.key === k)!,
       );
       const resultCols = visibleCols.filter((c) => NUMERIC_KEYS.has(c.key));
-
       const exportRows: Record<string, string | number>[] = [];
 
-      const addGroup = (group: PivotGroup, depth: number) => {
-        const key = pivotRows[depth];
-        const agg = aggregateRows(group.rows);
-
-        const row: Record<string, string | number> = {};
-        for (const pc of pivotCols) {
-          row[pc.label] = pc.key === key ? group.keys[key] : "";
+      if (pivotDisplayMode === "flat") {
+        // Flat pivot export
+        const groups = buildPivotGroups(filteredResults, pivotRows);
+        const leafGroups = collectLeafGroups(groups, pivotRows, 0, {});
+        for (const leaf of leafGroups) {
+          const agg = aggregateRows(leaf.rows);
+          const row: Record<string, string | number> = {};
+          for (const pc of pivotCols) {
+            row[pc.label] = leaf.combinedKeys[pc.key] || "-";
+          }
+          row["Count"] = leaf.rows.length;
+          for (const rc of resultCols) {
+            row[rc.label] = Math.round(agg[rc.key] * 100) / 100;
+          }
+          exportRows.push(row);
         }
-        for (const rc of resultCols) {
-          row[rc.label] = Math.round(agg[rc.key] * 100) / 100;
-        }
-        row["Count"] = group.rows.length;
-        exportRows.push(row);
-
-        for (const child of group.children) {
-          addGroup(child, depth + 1);
-        }
-      };
-
-      for (const g of groups) addGroup(g, 0);
+      } else {
+        // Nested pivot export
+        const groups = buildPivotGroups(filteredResults, pivotRows);
+        const addGroup = (group: PivotGroup, depth: number) => {
+          const key = pivotRows[depth];
+          const agg = aggregateRows(group.rows);
+          const row: Record<string, string | number> = {};
+          for (const pc of pivotCols) {
+            row[pc.label] = pc.key === key ? group.keys[key] : "";
+          }
+          row["Count"] = group.rows.length;
+          for (const rc of resultCols) {
+            row[rc.label] = Math.round(agg[rc.key] * 100) / 100;
+          }
+          exportRows.push(row);
+          for (const child of group.children) {
+            addGroup(child, depth + 1);
+          }
+        };
+        for (const g of groups) addGroup(g, 0);
+      }
 
       const ws = XLSX.utils.json_to_sheet(exportRows);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Pivot");
-      XLSX.writeFile(wb, "cashflow_pivot.xlsx");
+      XLSX.writeFile(
+        wb,
+        `cashflow_pivot_${fLabel.replace(/[^a-zA-Z0-9]/g, "_")}.xlsx`,
+      );
     } else {
       // Export raw data
       const exportRows = filteredResults.map((row) => {
         const obj: Record<string, string | number> = {};
         for (const col of visibleCols) {
           const val = col.getValue(row);
-          obj[col.label] = val;
+          obj[col.label] = safeVal(val);
         }
         return obj;
       });
@@ -1256,9 +1312,12 @@ export default function Home() {
       const ws = XLSX.utils.json_to_sheet(exportRows);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Cashflow");
-      XLSX.writeFile(wb, "cashflow_output.xlsx");
+      XLSX.writeFile(
+        wb,
+        `cashflow_${fLabel.replace(/[^a-zA-Z0-9]/g, "_")}.xlsx`,
+      );
     }
-  }, [filteredResults, visibleColumns, pivotRows]);
+  }, [filteredResults, visibleColumns, pivotRows, pivotDisplayMode, filter]);
 
   /* Stats */
   const totalOutstanding = records.reduce((s, r) => s + r.outstanding, 0);
@@ -1382,11 +1441,7 @@ export default function Home() {
                 ✕ Clear Filters ({activeFilterCount})
               </button>
             )}
-            {processed && results.length > 0 && (
-              <button className="btn-export" onClick={handleExportExcel}>
-                📥 Export Excel
-              </button>
-            )}
+
             <button
               className="btn-process"
               disabled={!file}
@@ -1444,6 +1499,9 @@ export default function Home() {
                 <span className="results-badge">
                   {filter === "both" ? "BBI + Interest" : filter.toUpperCase()}
                 </span>
+                <button className="btn-export" onClick={handleExportExcel}>
+                  📥 Export Excel
+                </button>
                 {pivotRows.length > 0 && (
                   <>
                     <span className="results-badge pivot-badge">

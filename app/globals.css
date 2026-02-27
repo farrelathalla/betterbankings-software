@@ -882,9 +882,7 @@ body {
 /*   FILTER DROPDOWN        */
 /* ======================== */
 .filter-dropdown {
-  position: absolute;
-  top: 100%;
-  right: 0;
+  position: fixed;
   z-index: 1000;
   width: 260px;
   background: linear-gradient(135deg, var(--blue-900), #0d1f38);
