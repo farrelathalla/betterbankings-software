@@ -8,16 +8,32 @@ import React, {
   useEffect,
 } from "react";
 import ReactDOM from "react-dom";
-import { parseTxtFile, LoanRecord } from "./lib/parser";
+import LoginPage from "./components/LoginPage";
 import {
-  processRecords,
-  CashflowRow,
-  FilterType,
+  isLoggedIn,
+  logout,
+  getUsername,
+  uploadCSV,
+  waitForProcessing,
+  getResults,
+  getSummary,
+  downloadExport,
+  getPivot,
+  getFilterOptions,
+  UploadStatus,
+  ResultRow,
+  PivotGroup as APIPivotGroup,
+  SummaryResponse,
+  ValidationError,
   IRRBB_LABELS,
   LCR_LABELS,
   NSFR_LABELS,
-} from "./lib/cashflow";
-import * as XLSX from "xlsx";
+} from "./lib/api";
+
+/* ============================================================ */
+/*  TYPES                                                       */
+/* ============================================================ */
+type FilterType = "bbi" | "interest" | "both";
 
 /* ============================================================ */
 /*  COLUMN DEFINITIONS                                          */
@@ -27,14 +43,7 @@ interface ColDef {
   label: string;
   group: string;
   type: "input" | "result";
-  getValue: (row: CashflowRow) => string | number;
-}
-
-function formatDate(d: Date): string {
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  return `${dd}/${mm}/${yyyy}`;
+  getValue: (row: ResultRow) => string | number;
 }
 
 function formatNumber(n: number): string {
@@ -49,186 +58,256 @@ function formatPercent(n: number): string {
   return (n * 100).toFixed(2) + "%";
 }
 
-const INPUT_COLUMNS: ColDef[] = [
-  {
-    key: "reportingDate",
-    label: "Reporting Date",
-    group: "Input",
-    type: "input",
-    getValue: (r) => formatDate(r.reportingDate),
-  },
-  {
-    key: "accountId",
-    label: "Account ID",
-    group: "Input",
-    type: "input",
-    getValue: (r) => r.accountId,
-  },
-  {
-    key: "ccy",
-    label: "CCY",
-    group: "Input",
-    type: "input",
-    getValue: (r) => r.ccy,
-  },
-  {
-    key: "outstanding",
-    label: "Outstanding",
-    group: "Input",
-    type: "input",
-    getValue: (r) => r.outstanding,
-  },
-  {
-    key: "interestRate",
-    label: "Interest Rate",
-    group: "Input",
-    type: "input",
-    getValue: (r) => r.interestRate,
-  },
-  {
-    key: "startDate",
-    label: "Start Date",
-    group: "Input",
-    type: "input",
-    getValue: (r) => formatDate(r.startDate),
-  },
-  {
-    key: "endDate",
-    label: "End Date",
-    group: "Input",
-    type: "input",
-    getValue: (r) => formatDate(r.endDate),
-  },
-  {
-    key: "installment",
-    label: "Installment",
-    group: "Input",
-    type: "input",
-    getValue: (r) => r.installment,
-  },
-  {
-    key: "productType",
-    label: "Product Type",
-    group: "Input",
-    type: "input",
-    getValue: (r) => r.productType,
-  },
-  {
-    key: "segment",
-    label: "Segment",
-    group: "Input",
-    type: "input",
-    getValue: (r) => r.segment,
-  },
-  {
-    key: "daerah",
-    label: "Daerah",
-    group: "Input",
-    type: "input",
-    getValue: (r) => r.daerah,
-  },
-  {
-    key: "kodePos",
-    label: "KodePos",
-    group: "Input",
-    type: "input",
-    getValue: (r) => r.kodePos,
-  },
-  {
-    key: "insuredUninsured",
-    label: "Insured/Uninsured",
-    group: "Input",
-    type: "input",
-    getValue: (r) => r.insuredUninsured,
-  },
-  {
-    key: "transactional",
-    label: "Transactional/Non",
-    group: "Input",
-    type: "input",
-    getValue: (r) => r.transactional,
-  },
-  {
-    key: "method",
-    label: "Method",
-    group: "Input",
-    type: "input",
-    getValue: (r) => r.method,
-  },
-];
+/** Merge principal+interest maps from a ResultRow into a single value for a bucket label */
+function getBucketValue(
+  row: ResultRow,
+  bucketType: "irrbb" | "lcr" | "nsfr",
+  label: string,
+  filterType: FilterType
+): number {
+  const pKey = `${bucketType}_principal` as keyof ResultRow;
+  const iKey = `${bucketType}_interest` as keyof ResultRow;
+  const pMap = (row[pKey] as Record<string, number> | null) || {};
+  const iMap = (row[iKey] as Record<string, number> | null) || {};
+  const p = pMap[label] || 0;
+  const i = iMap[label] || 0;
+  if (filterType === "bbi") return p;
+  if (filterType === "interest") return i;
+  return p + i;
+}
 
-const REMDAYS_COLUMN: ColDef = {
-  key: "remainingDays",
-  label: "Rem. Days",
-  group: "RemDays",
-  type: "result",
-  getValue: (r) => r.remainingDays,
-};
+function buildColumns(filterType: FilterType): ColDef[] {
+  const inputCols: ColDef[] = [
+    {
+      key: "reporting_date",
+      label: "Reporting Date",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.reporting_date,
+    },
+    {
+      key: "account_id",
+      label: "Account ID",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.account_id,
+    },
+    {
+      key: "ccy",
+      label: "CCY",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.ccy,
+    },
+    {
+      key: "outstanding",
+      label: "Outstanding",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.outstanding,
+    },
+    {
+      key: "interest_rate",
+      label: "Interest Rate",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.interest_rate,
+    },
+    {
+      key: "start_date",
+      label: "Start Date",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.start_date,
+    },
+    {
+      key: "end_date",
+      label: "End Date",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.end_date,
+    },
+    {
+      key: "installment_frequency",
+      label: "Installment Freq.",
+      group: "Input",
+      type: "input",
+      getValue: (r) =>
+        r.installment_frequency != null ? String(r.installment_frequency) : "-",
+    },
+    {
+      key: "product_type",
+      label: "Product Type",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.product_type,
+    },
+    {
+      key: "segment",
+      label: "Segment",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.segment,
+    },
+    {
+      key: "daerah",
+      label: "Daerah",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.daerah,
+    },
+    {
+      key: "kode_pos",
+      label: "KodePos",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.kode_pos,
+    },
+    {
+      key: "insured_or_uninsured",
+      label: "Insured/Uninsured",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.insured_or_uninsured,
+    },
+    {
+      key: "transactional_or_non",
+      label: "Transactional/Non",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.transactional_or_non,
+    },
+    {
+      key: "method",
+      label: "Method",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.method,
+    },
+    {
+      key: "interest_payment_frequency",
+      label: "Interest Pay Freq.",
+      group: "Input",
+      type: "input",
+      getValue: (r) =>
+        r.interest_payment_frequency != null
+          ? String(r.interest_payment_frequency)
+          : "-",
+    },
+    {
+      key: "day_count",
+      label: "Day Count",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.day_count,
+    },
+  ];
 
-const LCR_COLUMNS: ColDef[] = LCR_LABELS.map((label, i) => ({
-  key: `lcr_${i}`,
-  label,
-  group: "CF LCR",
-  type: "result" as const,
-  getValue: (r: CashflowRow) => r.lcrBuckets[i],
-}));
+  const remDays: ColDef = {
+    key: "remaining_days",
+    label: "Rem. Days",
+    group: "RemDays",
+    type: "result",
+    getValue: (r) => r.remaining_days,
+  };
 
-const NSFR_COLUMNS: ColDef[] = NSFR_LABELS.map((label, i) => ({
-  key: `nsfr_${i}`,
-  label,
-  group: "CF NSFR",
-  type: "result" as const,
-  getValue: (r: CashflowRow) => r.nsfrBuckets[i],
-}));
+  const lcrCols: ColDef[] = LCR_LABELS.map((label) => ({
+    key: `lcr__${label}`,
+    label,
+    group: "CF LCR",
+    type: "result" as const,
+    getValue: (r: ResultRow) => getBucketValue(r, "lcr", label, filterType),
+  }));
 
-const IRRBB_COLUMNS: ColDef[] = IRRBB_LABELS.map((label, i) => ({
-  key: `irrbb_${i}`,
-  label,
-  group: "CF IRRBB",
-  type: "result" as const,
-  getValue: (r: CashflowRow) => r.irrbbBuckets[i],
-}));
+  const nsfrCols: ColDef[] = NSFR_LABELS.map((label) => ({
+    key: `nsfr__${label}`,
+    label,
+    group: "CF NSFR",
+    type: "result" as const,
+    getValue: (r: ResultRow) => getBucketValue(r, "nsfr", label, filterType),
+  }));
 
-const ALL_COLUMNS: ColDef[] = [
-  ...INPUT_COLUMNS,
-  REMDAYS_COLUMN,
-  ...LCR_COLUMNS,
-  ...NSFR_COLUMNS,
-  ...IRRBB_COLUMNS,
-];
+  const irrbbCols: ColDef[] = IRRBB_LABELS.map((label) => ({
+    key: `irrbb__${label}`,
+    label,
+    group: "CF IRRBB",
+    type: "result" as const,
+    getValue: (r: ResultRow) => getBucketValue(r, "irrbb", label, filterType),
+  }));
 
-const COLUMN_GROUPS = [
-  { name: "Input", columns: INPUT_COLUMNS.map((c) => c.key) },
-  { name: "RemDays", columns: ["remainingDays"] },
-  { name: "CF LCR", columns: LCR_COLUMNS.map((c) => c.key) },
-  { name: "CF NSFR", columns: NSFR_COLUMNS.map((c) => c.key) },
-  { name: "CF IRRBB", columns: IRRBB_COLUMNS.map((c) => c.key) },
-];
+  return [...inputCols, remDays, ...lcrCols, ...nsfrCols, ...irrbbCols];
+}
 
-// Columns that can be used as pivot row fields (text/category)
-const PIVOTABLE_KEYS = [
-  "reportingDate",
-  "accountId",
+const INPUT_KEYS = [
+  "reporting_date",
+  "account_id",
   "ccy",
-  "installment",
-  "productType",
+  "outstanding",
+  "interest_rate",
+  "start_date",
+  "end_date",
+  "installment_frequency",
+  "product_type",
   "segment",
   "daerah",
-  "kodePos",
-  "insuredUninsured",
-  "transactional",
+  "kode_pos",
+  "insured_or_uninsured",
+  "transactional_or_non",
+  "method",
+  "interest_payment_frequency",
+  "day_count",
+];
+
+const PIVOTABLE_KEYS = [
+  "reporting_date",
+  "account_id",
+  "ccy",
+  "installment_frequency",
+  "product_type",
+  "segment",
+  "daerah",
+  "kode_pos",
+  "insured_or_uninsured",
+  "transactional_or_non",
   "method",
 ];
 
-// Columns that are numeric → get summed in pivot
-const NUMERIC_KEYS = new Set([
-  "outstanding",
-  "interestRate",
-  "remainingDays",
-  ...LCR_COLUMNS.map((c) => c.key),
-  ...NSFR_COLUMNS.map((c) => c.key),
-  ...IRRBB_COLUMNS.map((c) => c.key),
-]);
+function getColumnGroups(allColumns: ColDef[]) {
+  return [
+    {
+      name: "Input",
+      columns: allColumns.filter((c) => c.group === "Input").map((c) => c.key),
+    },
+    { name: "RemDays", columns: ["remaining_days"] },
+    {
+      name: "CF LCR",
+      columns: allColumns.filter((c) => c.group === "CF LCR").map((c) => c.key),
+    },
+    {
+      name: "CF NSFR",
+      columns: allColumns
+        .filter((c) => c.group === "CF NSFR")
+        .map((c) => c.key),
+    },
+    {
+      name: "CF IRRBB",
+      columns: allColumns
+        .filter((c) => c.group === "CF IRRBB")
+        .map((c) => c.key),
+    },
+  ];
+}
+
+function isNumericKey(key: string): boolean {
+  return (
+    key === "outstanding" ||
+    key === "interest_rate" ||
+    key === "remaining_days" ||
+    key.startsWith("lcr__") ||
+    key.startsWith("nsfr__") ||
+    key.startsWith("irrbb__")
+  );
+}
 
 /* ============================================================ */
 /*  COLUMN FILTER TYPES & HELPERS                               */
@@ -253,7 +332,7 @@ function getDefaultFilterState(): ColumnFilterState {
 
 function isFilterActive(
   fs: ColumnFilterState | undefined,
-  allValues: string[],
+  allValues: string[]
 ): boolean {
   if (!fs) return false;
   if (fs.sortDirection !== null) return true;
@@ -292,12 +371,11 @@ function FilterDropdown({
     selectedValues: new Set(
       filterState.selectedValues.size > 0
         ? filterState.selectedValues
-        : allValues,
+        : allValues
     ),
   }));
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Close on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (
@@ -312,11 +390,11 @@ function FilterDropdown({
   }, [onClose]);
 
   const filteredValues = allValues.filter((v) =>
-    v.toLowerCase().includes(localState.searchText.toLowerCase()),
+    v.toLowerCase().includes(localState.searchText.toLowerCase())
   );
 
   const allSelected = filteredValues.every((v) =>
-    localState.selectedValues.has(v),
+    localState.selectedValues.has(v)
   );
 
   const toggleSelectAll = () => {
@@ -340,7 +418,6 @@ function FilterDropdown({
   };
 
   const handleApply = () => {
-    // If all values selected, treat as "no filter"
     const finalState = { ...localState };
     if (finalState.selectedValues.size === allValues.length) {
       finalState.selectedValues = new Set<string>();
@@ -368,10 +445,11 @@ function FilterDropdown({
         </button>
       </div>
 
-      {/* Sort */}
       <div className="filter-dropdown-sort">
         <button
-          className={`filter-sort-btn ${localState.sortDirection === "asc" ? "active" : ""}`}
+          className={`filter-sort-btn ${
+            localState.sortDirection === "asc" ? "active" : ""
+          }`}
           onClick={() =>
             setLocalState((prev) => ({
               ...prev,
@@ -382,7 +460,9 @@ function FilterDropdown({
           ↑ Sort A→Z
         </button>
         <button
-          className={`filter-sort-btn ${localState.sortDirection === "desc" ? "active" : ""}`}
+          className={`filter-sort-btn ${
+            localState.sortDirection === "desc" ? "active" : ""
+          }`}
           onClick={() =>
             setLocalState((prev) => ({
               ...prev,
@@ -394,7 +474,6 @@ function FilterDropdown({
         </button>
       </div>
 
-      {/* Number range (numeric columns only) */}
       {isNumeric && (
         <div className="filter-dropdown-range">
           <span className="filter-range-label">Range:</span>
@@ -420,7 +499,6 @@ function FilterDropdown({
         </div>
       )}
 
-      {/* Search */}
       <div className="filter-dropdown-search">
         <input
           type="text"
@@ -433,7 +511,6 @@ function FilterDropdown({
         />
       </div>
 
-      {/* Select all */}
       <div className="filter-dropdown-selectall">
         <label className="filter-checkbox-label">
           <input
@@ -445,7 +522,6 @@ function FilterDropdown({
         </label>
       </div>
 
-      {/* Value list */}
       <div className="filter-dropdown-values">
         {filteredValues.map((val) => (
           <label key={val} className="filter-checkbox-label">
@@ -462,7 +538,6 @@ function FilterDropdown({
         )}
       </div>
 
-      {/* Actions */}
       <div className="filter-dropdown-actions">
         <button className="filter-action-clear" onClick={handleClear}>
           Clear
@@ -479,17 +554,20 @@ function FilterDropdown({
 /*  COLUMN SELECTOR COMPONENT                                   */
 /* ============================================================ */
 function ColumnSelector({
+  allColumns,
   visibleColumns,
   onToggle,
   pivotRows,
   onTogglePivotRow,
 }: {
+  allColumns: ColDef[];
   visibleColumns: Set<string>;
   onToggle: (keys: string[]) => void;
   pivotRows: string[];
   onTogglePivotRow: (key: string) => void;
 }) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const columnGroups = useMemo(() => getColumnGroups(allColumns), [allColumns]);
 
   const toggleGroupExpand = (name: string) => {
     setExpandedGroups((prev) => {
@@ -503,7 +581,7 @@ function ColumnSelector({
     <div className="column-selector">
       <div className="column-selector-title">📋 Columns & Pivot</div>
       <div className="column-groups-container">
-        {COLUMN_GROUPS.map((group) => {
+        {columnGroups.map((group) => {
           const allChecked = group.columns.every((k) => visibleColumns.has(k));
           const someChecked = group.columns.some((k) => visibleColumns.has(k));
           const expanded = expandedGroups.has(group.name);
@@ -536,7 +614,8 @@ function ColumnSelector({
               {expanded && (
                 <div className="column-group-children">
                   {group.columns.map((key) => {
-                    const col = ALL_COLUMNS.find((c) => c.key === key)!;
+                    const col = allColumns.find((c) => c.key === key);
+                    if (!col) return null;
                     const isPivotable = PIVOTABLE_KEYS.includes(key);
                     const isPivotActive = pivotRows.includes(key);
                     return (
@@ -551,7 +630,9 @@ function ColumnSelector({
                         </label>
                         {isPivotable && (
                           <button
-                            className={`pivot-btn ${isPivotActive ? "active" : ""}`}
+                            className={`pivot-btn ${
+                              isPivotActive ? "active" : ""
+                            }`}
                             onClick={() => onTogglePivotRow(key)}
                             title={
                               isPivotActive
@@ -577,10 +658,10 @@ function ColumnSelector({
         <div className="pivot-order">
           <div className="pivot-order-title">Pivot Row Order:</div>
           {pivotRows.map((key, i) => {
-            const col = ALL_COLUMNS.find((c) => c.key === key)!;
+            const col = allColumns.find((c) => c.key === key);
             return (
               <span key={key} className="pivot-order-tag">
-                {i + 1}. {col.label}
+                {i + 1}. {col?.label || key}
               </span>
             );
           })}
@@ -591,111 +672,27 @@ function ColumnSelector({
 }
 
 /* ============================================================ */
-/*  PIVOT TABLE LOGIC                                           */
-/* ============================================================ */
-interface PivotGroup {
-  keys: Record<string, string>;
-  rows: CashflowRow[];
-  children: PivotGroup[];
-}
-
-function buildPivotGroups(
-  rows: CashflowRow[],
-  pivotKeys: string[],
-  depth: number = 0,
-): PivotGroup[] {
-  if (depth >= pivotKeys.length) return [];
-
-  const key = pivotKeys[depth];
-  const col = ALL_COLUMNS.find((c) => c.key === key)!;
-  const grouped = new Map<string, CashflowRow[]>();
-
-  for (const row of rows) {
-    const val = String(col.getValue(row));
-    if (!grouped.has(val)) grouped.set(val, []);
-    grouped.get(val)!.push(row);
-  }
-
-  return Array.from(grouped.entries()).map(([val, groupRows]) => ({
-    keys: { [key]: val },
-    rows: groupRows,
-    children: buildPivotGroups(groupRows, pivotKeys, depth + 1),
-  }));
-}
-
-function aggregateRows(rows: CashflowRow[]): Record<string, number> {
-  const sums: Record<string, number> = {};
-  for (const col of ALL_COLUMNS) {
-    if (NUMERIC_KEYS.has(col.key)) {
-      sums[col.key] = rows.reduce((s, r) => s + (col.getValue(r) as number), 0);
-    }
-  }
-  return sums;
-}
-
-/* Collect all leaf groups from the pivot tree */
-function collectLeafGroups(
-  groups: PivotGroup[],
-  pivotKeys: string[],
-  depth: number,
-  parentKeys: Record<string, string>,
-): { combinedKeys: Record<string, string>; rows: CashflowRow[] }[] {
-  const results: {
-    combinedKeys: Record<string, string>;
-    rows: CashflowRow[];
-  }[] = [];
-  const key = pivotKeys[depth];
-
-  for (const group of groups) {
-    const currentKeys = { ...parentKeys, [key]: group.keys[key] };
-
-    if (depth === pivotKeys.length - 1 || group.children.length === 0) {
-      // This is a leaf
-      results.push({ combinedKeys: currentKeys, rows: group.rows });
-    } else {
-      results.push(
-        ...collectLeafGroups(group.children, pivotKeys, depth + 1, currentKeys),
-      );
-    }
-  }
-  return results;
-}
-
-/* ============================================================ */
 /*  FILTERABLE HEADER CELL                                      */
 /* ============================================================ */
 function FilterableHeader({
   col,
   className,
-  data,
+  allValues,
   columnFilters,
   onApplyFilter,
 }: {
   col: ColDef;
   className: string;
-  data: CashflowRow[];
+  allValues: string[];
   columnFilters: Record<string, ColumnFilterState>;
   onApplyFilter: (key: string, state: ColumnFilterState) => void;
 }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
-  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number }>(
-    {
-      top: 0,
-      left: 0,
-    },
-  );
-
-  const allValues = useMemo(() => {
-    const set = new Set<string>();
-    for (const row of data) {
-      set.add(String(col.getValue(row)));
-    }
-    return Array.from(set).sort();
-  }, [data, col]);
+  const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0 });
 
   const isActive = isFilterActive(columnFilters[col.key], allValues);
-  const isNum = NUMERIC_KEYS.has(col.key);
+  const isNum = isNumericKey(col.key);
 
   const handleToggle = useCallback(
     (e: React.MouseEvent) => {
@@ -709,7 +706,7 @@ function FilterableHeader({
       }
       setOpen(!open);
     },
-    [open],
+    [open]
   );
 
   return (
@@ -738,276 +735,16 @@ function FilterableHeader({
             posTop={dropdownPos.top}
             posLeft={dropdownPos.left}
           />,
-          document.body,
+          document.body
         )}
     </th>
-  );
-}
-
-/* ============================================================ */
-/*  PIVOT TABLE COMPONENT                                       */
-/* ============================================================ */
-function PivotTable({
-  data,
-  visibleColumns,
-  pivotRows,
-  pivotDisplayMode,
-  onDrillDown,
-  columnFilters,
-  onApplyFilter,
-}: {
-  data: CashflowRow[];
-  visibleColumns: Set<string>;
-  pivotRows: string[];
-  pivotDisplayMode: "nested" | "flat";
-  onDrillDown: (filters: Record<string, string>) => void;
-  columnFilters: Record<string, ColumnFilterState>;
-  onApplyFilter: (key: string, state: ColumnFilterState) => void;
-}) {
-  const visibleCols = ALL_COLUMNS.filter((c) => visibleColumns.has(c.key));
-  const resultCols = visibleCols.filter((c) => NUMERIC_KEYS.has(c.key));
-  const isPivot = pivotRows.length > 0;
-
-  const groups = useMemo(
-    () => (isPivot ? buildPivotGroups(data, pivotRows) : []),
-    [data, pivotRows, isPivot],
-  );
-
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-
-  const toggleCollapse = (id: string) => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  };
-
-  // Regular table (no pivot)
-  if (!isPivot) {
-    return (
-      <div className="table-wrapper">
-        <table className="data-table">
-          <thead>
-            <tr>
-              {visibleCols.map((col, i) => (
-                <FilterableHeader
-                  key={col.key}
-                  col={col}
-                  className={getGroupBorderClass(col, visibleCols, i)}
-                  data={data}
-                  columnFilters={columnFilters}
-                  onApplyFilter={onApplyFilter}
-                />
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {data.map((row, idx) => (
-              <tr key={idx}>
-                {visibleCols.map((col, i) => {
-                  const val = col.getValue(row);
-                  return (
-                    <td
-                      key={col.key}
-                      className={getGroupBorderClass(col, visibleCols, i)}
-                    >
-                      {typeof val === "number"
-                        ? col.key === "interestRate"
-                          ? formatPercent(val)
-                          : col.key === "remainingDays"
-                            ? val
-                            : formatNumber(val)
-                        : val}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
-
-  // Pivot table — FLAT mode
-  if (pivotDisplayMode === "flat") {
-    const pivotCols = pivotRows
-      .map((k) => ALL_COLUMNS.find((c) => c.key === k)!)
-      .filter(Boolean);
-
-    const leafGroups = collectLeafGroups(groups, pivotRows, 0, {});
-
-    return (
-      <div className="table-wrapper">
-        <table className="data-table pivot-table">
-          <thead>
-            <tr>
-              {pivotCols.map((col) => (
-                <FilterableHeader
-                  key={col.key}
-                  col={col}
-                  className=""
-                  data={data}
-                  columnFilters={columnFilters}
-                  onApplyFilter={onApplyFilter}
-                />
-              ))}
-              <th className="col-separator">Count</th>
-              {resultCols.map((col, i) => (
-                <FilterableHeader
-                  key={col.key}
-                  col={col}
-                  className={
-                    i === 0
-                      ? "col-separator"
-                      : getGroupBorderClass(col, resultCols, i)
-                  }
-                  data={data}
-                  columnFilters={columnFilters}
-                  onApplyFilter={onApplyFilter}
-                />
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {leafGroups.map((leaf, idx) => {
-              const agg = aggregateRows(leaf.rows);
-              return (
-                <tr key={idx}>
-                  {pivotCols.map((pc) => (
-                    <td key={pc.key} className="pivot-flat-cell">
-                      <button
-                        className="pivot-group-value"
-                        onClick={() => onDrillDown(leaf.combinedKeys)}
-                        title="Click to drill down"
-                      >
-                        {leaf.combinedKeys[pc.key] || "-"}
-                      </button>
-                    </td>
-                  ))}
-                  <td className="col-separator pivot-agg-cell">
-                    {leaf.rows.length}
-                  </td>
-                  {resultCols.map((rc, i) => (
-                    <td
-                      key={rc.key}
-                      className={`pivot-agg-cell ${i === 0 ? "col-separator" : ""}`}
-                    >
-                      {rc.key === "interestRate"
-                        ? formatPercent(agg[rc.key] / leaf.rows.length)
-                        : rc.key === "remainingDays"
-                          ? Math.round(agg[rc.key])
-                          : formatNumber(agg[rc.key])}
-                    </td>
-                  ))}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
-
-  // Pivot table — NESTED mode (existing)
-  const pivotCols = pivotRows
-    .map((k) => ALL_COLUMNS.find((c) => c.key === k)!)
-    .filter(Boolean);
-
-  const renderGroup = (
-    group: PivotGroup,
-    depth: number,
-    parentKeys: Record<string, string>,
-    parentId: string,
-  ): React.ReactNode[] => {
-    const key = pivotRows[depth];
-    const col = ALL_COLUMNS.find((c) => c.key === key)!;
-    const val = group.keys[key];
-    const currentKeys = { ...parentKeys, [key]: val };
-    const groupId = parentId + "|" + key + "=" + val;
-    const isCollapsed = collapsed.has(groupId);
-    const agg = aggregateRows(group.rows);
-    const nodes: React.ReactNode[] = [];
-
-    // Group header row
-    nodes.push(
-      <tr key={groupId} className={`pivot-group-row depth-${depth}`}>
-        <td
-          className="pivot-group-cell"
-          colSpan={pivotCols.length}
-          style={{ paddingLeft: `${depth * 24 + 8}px` }}
-        >
-          <button
-            className="pivot-toggle"
-            onClick={() => toggleCollapse(groupId)}
-          >
-            {isCollapsed ? "▸" : "▾"}
-          </button>
-          <span className="pivot-group-label">{col.label}:</span>
-          <button
-            className="pivot-group-value"
-            onClick={() => onDrillDown(currentKeys)}
-            title="Click to drill down"
-          >
-            {val}
-          </button>
-          <span className="pivot-group-count">({group.rows.length})</span>
-        </td>
-        {resultCols.map((rc) => (
-          <td key={rc.key} className="pivot-agg-cell">
-            {rc.key === "interestRate"
-              ? formatPercent(agg[rc.key] / group.rows.length)
-              : rc.key === "remainingDays"
-                ? Math.round(agg[rc.key])
-                : formatNumber(agg[rc.key])}
-          </td>
-        ))}
-      </tr>,
-    );
-
-    // Children
-    if (!isCollapsed) {
-      if (group.children.length > 0) {
-        for (const child of group.children) {
-          nodes.push(...renderGroup(child, depth + 1, currentKeys, groupId));
-        }
-      }
-    }
-
-    return nodes;
-  };
-
-  return (
-    <div className="table-wrapper">
-      <table className="data-table pivot-table">
-        <thead>
-          <tr>
-            <th colSpan={pivotCols.length} className="pivot-header-group">
-              Grouped By
-            </th>
-            {resultCols.map((col) => (
-              <FilterableHeader
-                key={col.key}
-                col={col}
-                className=""
-                data={data}
-                columnFilters={columnFilters}
-                onApplyFilter={onApplyFilter}
-              />
-            ))}
-          </tr>
-        </thead>
-        <tbody>{groups.flatMap((g) => renderGroup(g, 0, {}, "root"))}</tbody>
-      </table>
-    </div>
   );
 }
 
 function getGroupBorderClass(
   col: ColDef,
   visibleCols: ColDef[],
-  idx: number,
+  idx: number
 ): string {
   if (idx === 0) return "";
   const prevGroup = visibleCols[idx - 1]?.group;
@@ -1015,41 +752,313 @@ function getGroupBorderClass(
 }
 
 /* ============================================================ */
+/*  FLAT RESULT TABLE (no pivot)                                */
+/* ============================================================ */
+function ResultTable({
+  data,
+  visibleColumns,
+  allColumns,
+  columnFilters,
+  onApplyFilter,
+  distinctValues,
+}: {
+  data: ResultRow[];
+  visibleColumns: Set<string>;
+  allColumns: ColDef[];
+  columnFilters: Record<string, ColumnFilterState>;
+  onApplyFilter: (key: string, state: ColumnFilterState) => void;
+  distinctValues: Record<string, string[]>;
+}) {
+  const visibleCols = allColumns.filter((c) => visibleColumns.has(c.key));
+
+  return (
+    <div className="table-wrapper">
+      <table className="data-table">
+        <thead>
+          <tr>
+            {visibleCols.map((col, i) => (
+              <FilterableHeader
+                key={col.key}
+                col={col}
+                className={getGroupBorderClass(col, visibleCols, i)}
+                allValues={distinctValues[col.key] || []}
+                columnFilters={columnFilters}
+                onApplyFilter={onApplyFilter}
+              />
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((row, idx) => (
+            <tr key={row.row_number || idx}>
+              {visibleCols.map((col, i) => {
+                const val = col.getValue(row);
+                return (
+                  <td
+                    key={col.key}
+                    className={getGroupBorderClass(col, visibleCols, i)}
+                  >
+                    {typeof val === "number"
+                      ? col.key === "interest_rate"
+                        ? formatPercent(val)
+                        : col.key === "remaining_days"
+                        ? val
+                        : formatNumber(val)
+                      : val}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ============================================================ */
+/*  PIVOT TABLE (server-side data)                              */
+/* ============================================================ */
+function PivotTableView({
+  pivotData,
+  pivotRows,
+  visibleColumns,
+  allColumns,
+  onDrillDown,
+}: {
+  pivotData: APIPivotGroup[];
+  pivotRows: string[];
+  visibleColumns: Set<string>;
+  allColumns: ColDef[];
+  onDrillDown: (filters: Record<string, string>) => void;
+}) {
+  const visibleCols = allColumns.filter((c) => visibleColumns.has(c.key));
+  const resultCols = visibleCols.filter((c) => isNumericKey(c.key));
+  const pivotCols = pivotRows
+    .map((k) => allColumns.find((c) => c.key === k)!)
+    .filter(Boolean);
+
+  return (
+    <div className="table-wrapper">
+      <table className="data-table pivot-table">
+        <thead>
+          <tr>
+            {pivotCols.map((col) => (
+              <th key={col.key}>{col.label}</th>
+            ))}
+            <th className="col-separator">Count</th>
+            {resultCols.map((col, i) => (
+              <th
+                key={col.key}
+                className={
+                  i === 0
+                    ? "col-separator"
+                    : getGroupBorderClass(col, resultCols, i)
+                }
+              >
+                {col.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {pivotData.map((group, idx) => (
+            <tr key={idx}>
+              {pivotCols.map((pc) => (
+                <td key={pc.key} className="pivot-flat-cell">
+                  <button
+                    className="pivot-group-value"
+                    onClick={() => onDrillDown(group.keys)}
+                    title="Click to drill down"
+                  >
+                    {group.keys[pc.key] || "-"}
+                  </button>
+                </td>
+              ))}
+              <td className="col-separator pivot-agg-cell">{group.count}</td>
+              {resultCols.map((rc, i) => {
+                const val = group.aggregates[rc.key] || 0;
+                return (
+                  <td
+                    key={rc.key}
+                    className={`pivot-agg-cell ${
+                      i === 0 ? "col-separator" : ""
+                    }`}
+                  >
+                    {rc.key === "interest_rate"
+                      ? formatPercent(val / (group.count || 1))
+                      : rc.key === "remaining_days"
+                      ? Math.round(val)
+                      : formatNumber(val)}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ============================================================ */
 /*  MAIN PAGE                                                   */
 /* ============================================================ */
 export default function Home() {
+  // Auth
+  const [authenticated, setAuthenticated] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  // Upload
   const [file, setFile] = useState<File | null>(null);
-  const [records, setRecords] = useState<LoanRecord[]>([]);
-  const [results, setResults] = useState<CashflowRow[]>([]);
-  const [filter, setFilter] = useState<FilterType>("both");
-  const [error, setError] = useState<string | null>(null);
-  const [processed, setProcessed] = useState(false);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadId, setUploadId] = useState<string | null>(null);
+  const [processing, setProcessing] = useState(false);
+  const [processProgress, setProcessProgress] = useState("");
+  const [validationErrors, setValidationErrors] = useState<ValidationError[]>(
+    []
+  );
+
+  // Results
+  const [results, setResults] = useState<ResultRow[]>([]);
+  const [totalRows, setTotalRows] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [processed, setProcessed] = useState(false);
+
+  // Filter / view
+  const [filterType, setFilterType] = useState<FilterType>("both");
+  const [error, setError] = useState<string | null>(null);
 
   // Column visibility
+  const allColumns = useMemo(() => buildColumns(filterType), [filterType]);
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(
-    new Set(ALL_COLUMNS.map((c) => c.key)),
+    () => new Set(buildColumns("both").map((c) => c.key))
   );
 
-  // Pivot row fields
+  // Pivot
   const [pivotRows, setPivotRows] = useState<string[]>([]);
+  const [pivotData, setPivotData] = useState<APIPivotGroup[]>([]);
+  const [loadingPivot, setLoadingPivot] = useState(false);
 
-  // Pivot display mode
-  const [pivotDisplayMode, setPivotDisplayMode] = useState<"nested" | "flat">(
-    "nested",
-  );
-
-  // Column filters
+  // Column filters (local for filter dropdown values)
   const [columnFilters, setColumnFilters] = useState<
     Record<string, ColumnFilterState>
   >({});
+
+  // Distinct values for filter dropdowns
+  const [distinctValues, setDistinctValues] = useState<
+    Record<string, string[]>
+  >({});
+
+  // Summary
+  const [summary, setSummary] = useState<SummaryResponse | null>(null);
+
+  // Export
+  const [exporting, setExporting] = useState(false);
+  // Check auth on mount + handle ?upload_id= from history page
+  useEffect(() => {
+    const loggedIn = isLoggedIn();
+    setAuthenticated(loggedIn);
+    setAuthChecked(true);
+
+    if (loggedIn) {
+      const params = new URLSearchParams(window.location.search);
+      const existingUploadId = params.get("upload_id");
+      if (existingUploadId) {
+        // Remove from URL to keep it clean
+        window.history.replaceState({}, "", "/");
+        // Load results from existing upload
+        setUploadId(existingUploadId);
+        setProcessing(true);
+        setProcessProgress("Loading results...");
+        getResults(existingUploadId, {
+          page: 1,
+          limit: 20,
+          filter_type: filterType,
+        })
+          .then((pageData) => {
+            setResults(pageData.data || []);
+            setTotalRows(pageData.total);
+            setCurrentPage(1);
+            setTotalPages(pageData.total_pages);
+            setProcessed(true);
+            setProcessing(false);
+            setProcessProgress("");
+          })
+          .catch((err) => {
+            setError((err as Error).message);
+            setProcessing(false);
+            setProcessProgress("");
+          });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Fetch distinct values for visible input columns when we have results
+  useEffect(() => {
+    if (!uploadId || !processed) return;
+    const inputKeys = INPUT_KEYS.filter((k) => visibleColumns.has(k));
+    inputKeys.forEach(async (key) => {
+      if (distinctValues[key]) return;
+      try {
+        const vals = await getFilterOptions(uploadId, key);
+        setDistinctValues((prev) => ({ ...prev, [key]: vals }));
+      } catch {
+        // ignore
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadId, processed, visibleColumns]);
+
+  // Fetch summary when uploadId or filterType changes
+  useEffect(() => {
+    if (!uploadId || !processed) return;
+    getSummary(uploadId, filterType)
+      .then(setSummary)
+      .catch(() => {});
+  }, [uploadId, filterType, processed]);
+
+  // Fetch pivot data when pivotRows change
+  useEffect(() => {
+    if (!uploadId || !processed || pivotRows.length === 0) return;
+    setLoadingPivot(true);
+    getPivot(uploadId, pivotRows, filterType)
+      .then((data) => {
+        setPivotData(data);
+        setLoadingPivot(false);
+      })
+      .catch(() => setLoadingPivot(false));
+  }, [uploadId, processed, pivotRows, filterType]);
+
+  // ─── Handlers ──────────────────────────────────────────────
+  const handleLoginSuccess = useCallback(() => {
+    setAuthenticated(true);
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    await logout();
+    setAuthenticated(false);
+    setProcessed(false);
+    setResults([]);
+    setUploadId(null);
+    setSummary(null);
+  }, []);
 
   const handleFile = useCallback(async (f: File) => {
     setFile(f);
     setError(null);
     setProcessed(false);
     setResults([]);
+    setValidationErrors([]);
+    setUploadId(null);
+    setSummary(null);
+    setPivotData([]);
+    setColumnFilters({});
+    setDistinctValues({});
   }, []);
 
   const handleDrop = useCallback(
@@ -1059,34 +1068,125 @@ export default function Home() {
       const f = e.dataTransfer.files[0];
       if (f) handleFile(f);
     },
-    [handleFile],
+    [handleFile]
   );
+
+  const handleRemoveFile = useCallback(() => {
+    setFile(null);
+    setResults([]);
+    setProcessed(false);
+    setError(null);
+    setValidationErrors([]);
+    setUploadId(null);
+    setSummary(null);
+    setPivotData([]);
+    setColumnFilters({});
+    setDistinctValues({});
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }, []);
 
   const handleProcess = useCallback(async () => {
     if (!file) return;
     setError(null);
-    try {
-      const text = await file.text();
-      const parsed = parseTxtFile(text);
-      setRecords(parsed);
-      const res = processRecords(parsed, filter);
-      setResults(res);
-      setProcessed(true);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }, [file, filter]);
+    setValidationErrors([]);
+    setProcessing(true);
+    setProcessProgress("Uploading file...");
 
-  // Re-process when filter changes (if already processed)
-  const handleFilterChange = useCallback(
-    (f: FilterType) => {
-      setFilter(f);
-      if (records.length > 0) {
-        const res = processRecords(records, f);
-        setResults(res);
+    try {
+      const uploadRes = await uploadCSV(file);
+
+      if (uploadRes.errors && uploadRes.errors.length > 0) {
+        setValidationErrors(uploadRes.errors);
+        setProcessing(false);
+        setProcessProgress("");
+        return;
+      }
+
+      setUploadId(uploadRes.id);
+      setProcessProgress("Processing cashflow calculations...");
+
+      const finalStatus = await waitForProcessing(
+        uploadRes.id,
+        (status: UploadStatus) => {
+          if (status.status === "processing") {
+            setProcessProgress(
+              `Processing... ${status.total_rows} rows queued`
+            );
+          }
+        }
+      );
+
+      if (finalStatus.status === "failed") {
+        setError(finalStatus.error_message || "Processing failed");
+        setProcessing(false);
+        setProcessProgress("");
+        return;
+      }
+
+      setProcessProgress("Loading results...");
+      const pageData = await getResults(uploadRes.id, {
+        page: 1,
+        limit: 20,
+        filter_type: filterType,
+      });
+
+      setResults(pageData.data || []);
+      setTotalRows(pageData.total);
+      setCurrentPage(1);
+      setTotalPages(pageData.total_pages);
+      setProcessed(true);
+      setProcessing(false);
+      setProcessProgress("");
+    } catch (err: unknown) {
+      const error = err as Error & { validationErrors?: ValidationError[] };
+      if (error.validationErrors) {
+        setValidationErrors(error.validationErrors);
+      } else {
+        setError(error.message);
+      }
+      setProcessing(false);
+      setProcessProgress("");
+    }
+  }, [file, filterType]);
+
+  const handleLoadMore = useCallback(async () => {
+    if (!uploadId || loadingMore || currentPage >= totalPages) return;
+    setLoadingMore(true);
+    try {
+      const nextPage = currentPage + 1;
+      const pageData = await getResults(uploadId, {
+        page: nextPage,
+        limit: 20,
+        filter_type: filterType,
+      });
+      setResults((prev) => [...prev, ...(pageData.data || [])]);
+      setCurrentPage(nextPage);
+    } catch {
+      // ignore
+    }
+    setLoadingMore(false);
+  }, [uploadId, currentPage, totalPages, loadingMore, filterType]);
+
+  const handleFilterTypeChange = useCallback(
+    async (ft: FilterType) => {
+      setFilterType(ft);
+      if (!uploadId || !processed) return;
+
+      try {
+        const pageData = await getResults(uploadId, {
+          page: 1,
+          limit: 20,
+          filter_type: ft,
+        });
+        setResults(pageData.data || []);
+        setTotalRows(pageData.total);
+        setCurrentPage(1);
+        setTotalPages(pageData.total_pages);
+      } catch {
+        // ignore
       }
     },
-    [records],
+    [uploadId, processed]
   );
 
   const handleDownloadSample = useCallback(() => {
@@ -1094,16 +1194,6 @@ export default function Home() {
     a.href = "/sample_data.csv";
     a.download = "sample_data.csv";
     a.click();
-  }, []);
-
-  const handleRemoveFile = useCallback(() => {
-    setFile(null);
-    setRecords([]);
-    setResults([]);
-    setProcessed(false);
-    setError(null);
-    setColumnFilters({});
-    if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
 
   const toggleColumns = useCallback((keys: string[]) => {
@@ -1130,7 +1220,6 @@ export default function Home() {
     (key: string, state: ColumnFilterState) => {
       setColumnFilters((prev) => {
         const next = { ...prev };
-        // If everything is default, remove the entry
         if (
           state.selectedValues.size === 0 &&
           state.sortDirection === null &&
@@ -1144,19 +1233,17 @@ export default function Home() {
         return next;
       });
     },
-    [],
+    []
   );
 
-  // Apply column filters and sorting to results
+  // Apply client-side filters on loaded data
   const filteredResults = useMemo(() => {
     let data = [...results];
 
-    // Apply value filters and number range filters
     for (const [key, fs] of Object.entries(columnFilters)) {
-      const col = ALL_COLUMNS.find((c) => c.key === key);
+      const col = allColumns.find((c) => c.key === key);
       if (!col) continue;
 
-      // Value filter
       if (fs.selectedValues.size > 0) {
         data = data.filter((row) => {
           const val = String(col.getValue(row));
@@ -1164,8 +1251,7 @@ export default function Home() {
         });
       }
 
-      // Number range filter
-      if (NUMERIC_KEYS.has(key)) {
+      if (isNumericKey(key)) {
         if (fs.numberMin !== "") {
           const min = parseFloat(fs.numberMin);
           if (!isNaN(min)) {
@@ -1181,14 +1267,12 @@ export default function Home() {
       }
     }
 
-    // Apply sorting (last sort wins — apply in reverse order of keys)
     const sortEntries = Object.entries(columnFilters).filter(
-      ([, fs]) => fs.sortDirection !== null,
+      ([, fs]) => fs.sortDirection !== null
     );
     if (sortEntries.length > 0) {
-      // Use the last-applied sort
       const [sortKey, sortFs] = sortEntries[sortEntries.length - 1];
-      const sortCol = ALL_COLUMNS.find((c) => c.key === sortKey);
+      const sortCol = allColumns.find((c) => c.key === sortKey);
       if (sortCol && sortFs.sortDirection) {
         const dir = sortFs.sortDirection === "asc" ? 1 : -1;
         data.sort((a, b) => {
@@ -1203,125 +1287,33 @@ export default function Home() {
     }
 
     return data;
-  }, [results, columnFilters]);
+  }, [results, columnFilters, allColumns]);
 
-  // Drill-down: open new page with filters
+  // Drill-down: open new page with URL params
   const handleDrillDown = useCallback(
     (filters: Record<string, string>) => {
-      // Store data in sessionStorage
-      sessionStorage.setItem(
-        "bb_drilldown_data",
-        JSON.stringify(
-          filteredResults.map((r) => ({
-            ...r,
-            reportingDate: r.reportingDate.toISOString(),
-            startDate: r.startDate.toISOString(),
-            endDate: r.endDate.toISOString(),
-          })),
-        ),
-      );
-      sessionStorage.setItem("bb_drilldown_filters", JSON.stringify(filters));
-      sessionStorage.setItem(
-        "bb_drilldown_columns",
-        JSON.stringify(Array.from(visibleColumns)),
-      );
-      window.open("/drilldown", "_blank");
+      if (!uploadId) return;
+      const params = new URLSearchParams();
+      params.set("upload_id", uploadId);
+      params.set("filter_type", filterType);
+      params.set("filters", JSON.stringify(filters));
+      params.set("columns", JSON.stringify(Array.from(visibleColumns)));
+      window.open(`/drilldown?${params.toString()}`, "_blank");
     },
-    [filteredResults, visibleColumns],
+    [uploadId, filterType, visibleColumns]
   );
 
-  // Excel export
-  const handleExportExcel = useCallback(() => {
-    if (!filteredResults.length) return;
-
-    const visibleCols = ALL_COLUMNS.filter((c) => visibleColumns.has(c.key));
-    const fLabel = filterLabel[filter];
-
-    // Helper: safely convert any value to a plain string/number for xlsx
-    const safeVal = (val: string | number): string | number => {
-      if ((val as unknown) instanceof Date) {
-        return formatDate(val as unknown as Date);
-      }
-      return val;
-    };
-
-    // Check if pivot mode
-    if (pivotRows.length > 0) {
-      const pivotCols = pivotRows.map(
-        (k) => ALL_COLUMNS.find((c) => c.key === k)!,
-      );
-      const resultCols = visibleCols.filter((c) => NUMERIC_KEYS.has(c.key));
-      const exportRows: Record<string, string | number>[] = [];
-
-      if (pivotDisplayMode === "flat") {
-        // Flat pivot export
-        const groups = buildPivotGroups(filteredResults, pivotRows);
-        const leafGroups = collectLeafGroups(groups, pivotRows, 0, {});
-        for (const leaf of leafGroups) {
-          const agg = aggregateRows(leaf.rows);
-          const row: Record<string, string | number> = {};
-          for (const pc of pivotCols) {
-            row[pc.label] = leaf.combinedKeys[pc.key] || "-";
-          }
-          row["Count"] = leaf.rows.length;
-          for (const rc of resultCols) {
-            row[rc.label] = Math.round(agg[rc.key] * 100) / 100;
-          }
-          exportRows.push(row);
-        }
-      } else {
-        // Nested pivot export
-        const groups = buildPivotGroups(filteredResults, pivotRows);
-        const addGroup = (group: PivotGroup, depth: number) => {
-          const key = pivotRows[depth];
-          const agg = aggregateRows(group.rows);
-          const row: Record<string, string | number> = {};
-          for (const pc of pivotCols) {
-            row[pc.label] = pc.key === key ? group.keys[key] : "";
-          }
-          row["Count"] = group.rows.length;
-          for (const rc of resultCols) {
-            row[rc.label] = Math.round(agg[rc.key] * 100) / 100;
-          }
-          exportRows.push(row);
-          for (const child of group.children) {
-            addGroup(child, depth + 1);
-          }
-        };
-        for (const g of groups) addGroup(g, 0);
-      }
-
-      const ws = XLSX.utils.json_to_sheet(exportRows);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Pivot");
-      XLSX.writeFile(
-        wb,
-        `cashflow_pivot_${fLabel.replace(/[^a-zA-Z0-9]/g, "_")}.xlsx`,
-      );
-    } else {
-      // Export raw data
-      const exportRows = filteredResults.map((row) => {
-        const obj: Record<string, string | number> = {};
-        for (const col of visibleCols) {
-          const val = col.getValue(row);
-          obj[col.label] = safeVal(val);
-        }
-        return obj;
-      });
-
-      const ws = XLSX.utils.json_to_sheet(exportRows);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Cashflow");
-      XLSX.writeFile(
-        wb,
-        `cashflow_${fLabel.replace(/[^a-zA-Z0-9]/g, "_")}.xlsx`,
-      );
+  // Export Excel via BE
+  const handleExportExcel = useCallback(async () => {
+    if (!uploadId) return;
+    setExporting(true);
+    try {
+      await downloadExport(uploadId, filterType);
+    } catch (err) {
+      setError((err as Error).message);
     }
-  }, [filteredResults, visibleColumns, pivotRows, pivotDisplayMode, filter]);
-
-  /* Stats */
-  const totalOutstanding = records.reduce((s, r) => s + r.outstanding, 0);
-  const uniqueCurrencies = [...new Set(records.map((r) => r.ccy))];
+    setExporting(false);
+  }, [uploadId, filterType]);
 
   const filterLabel: Record<FilterType, string> = {
     bbi: "Installment Cashflow BBI",
@@ -1330,6 +1322,20 @@ export default function Home() {
   };
 
   const activeFilterCount = Object.keys(columnFilters).length;
+  const isPivot = pivotRows.length > 0;
+
+  // ─── Auth gate ───
+  if (!authChecked) {
+    return (
+      <div className="loading-fullscreen">
+        <div className="loading-spinner" />
+      </div>
+    );
+  }
+
+  if (!authenticated) {
+    return <LoginPage onLoginSuccess={handleLoginSuccess} />;
+  }
 
   return (
     <>
@@ -1342,9 +1348,20 @@ export default function Home() {
             <div className="header-subtitle">Cashflow Analysis Engine</div>
           </div>
         </div>
-        <button className="btn-sample" onClick={handleDownloadSample}>
-          📥 Download Sample CSV
-        </button>
+        <div className="header-actions">
+          <button className="btn-sample" onClick={handleDownloadSample}>
+            📥 Sample CSV
+          </button>
+          <a href="/history" className="btn-sample header-nav-link">
+            📂 History
+          </a>
+          <div className="header-user">
+            <span className="header-username">{getUsername()}</span>
+            <button className="btn-logout" onClick={handleLogout}>
+              Logout
+            </button>
+          </div>
+        </div>
       </header>
 
       {/* MAIN */}
@@ -1397,6 +1414,28 @@ export default function Home() {
           )}
         </div>
 
+        {/* VALIDATION ERRORS */}
+        {validationErrors.length > 0 && (
+          <div className="error-box fade-in">
+            <span className="error-icon">⚠️</span>
+            <div className="error-text">
+              <strong>CSV Validation Failed</strong>
+              <div className="validation-errors-list">
+                {validationErrors.slice(0, 20).map((ve, i) => (
+                  <div key={i} className="validation-error-item">
+                    Row {ve.row}, Column &quot;{ve.column}&quot;: {ve.message}
+                  </div>
+                ))}
+                {validationErrors.length > 20 && (
+                  <div className="validation-error-item">
+                    ...and {validationErrors.length - 20} more errors
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ERROR */}
         {error && (
           <div className="error-box fade-in">
@@ -1405,26 +1444,39 @@ export default function Home() {
           </div>
         )}
 
+        {/* PROCESSING STATE */}
+        {processing && (
+          <div className="processing-overlay fade-in">
+            <div className="processing-card">
+              <div className="loading-spinner" />
+              <div className="processing-text">{processProgress}</div>
+            </div>
+          </div>
+        )}
+
         {/* CONTROLS */}
         <div className="controls-bar">
           <div className="controls-left">
-            {/* Filter toggle */}
             <div className="filter-group">
               <button
-                className={`filter-btn ${filter === "bbi" ? "active" : ""}`}
-                onClick={() => handleFilterChange("bbi")}
+                className={`filter-btn ${filterType === "bbi" ? "active" : ""}`}
+                onClick={() => handleFilterTypeChange("bbi")}
               >
                 Cashflow BBI
               </button>
               <button
-                className={`filter-btn ${filter === "interest" ? "active" : ""}`}
-                onClick={() => handleFilterChange("interest")}
+                className={`filter-btn ${
+                  filterType === "interest" ? "active" : ""
+                }`}
+                onClick={() => handleFilterTypeChange("interest")}
               >
                 Interest
               </button>
               <button
-                className={`filter-btn ${filter === "both" ? "active" : ""}`}
-                onClick={() => handleFilterChange("both")}
+                className={`filter-btn ${
+                  filterType === "both" ? "active" : ""
+                }`}
+                onClick={() => handleFilterTypeChange("both")}
               >
                 Both (Sum)
               </button>
@@ -1441,28 +1493,27 @@ export default function Home() {
                 ✕ Clear Filters ({activeFilterCount})
               </button>
             )}
-
             <button
               className="btn-process"
-              disabled={!file}
+              disabled={!file || processing}
               onClick={handleProcess}
             >
-              ▶ Process Cashflow
+              {processing ? "⏳ Processing..." : "▶ Process Cashflow"}
             </button>
           </div>
         </div>
 
         {/* STATS */}
-        {processed && records.length > 0 && (
+        {processed && summary && (
           <div className="stats-bar fade-in">
             <div className="stat-card">
               <div className="stat-label">Total Records</div>
-              <div className="stat-value">{records.length}</div>
+              <div className="stat-value">{summary.total_count}</div>
             </div>
             <div className="stat-card">
               <div className="stat-label">Total Outstanding</div>
               <div className="stat-value small">
-                {totalOutstanding.toLocaleString("id-ID", {
+                {summary.total_outstanding.toLocaleString("id-ID", {
                   minimumFractionDigits: 0,
                   maximumFractionDigits: 0,
                 })}
@@ -1471,22 +1522,23 @@ export default function Home() {
             <div className="stat-card">
               <div className="stat-label">Currencies</div>
               <div className="stat-value small">
-                {uniqueCurrencies.join(", ")}
+                {summary.currencies?.join(", ") || "-"}
               </div>
             </div>
             <div className="stat-card">
               <div className="stat-label">Showing</div>
               <div className="stat-value small">
-                {filteredResults.length} / {results.length} rows
+                {filteredResults.length} of {totalRows} rows
               </div>
             </div>
           </div>
         )}
 
         {/* COLUMN SELECTOR & RESULTS */}
-        {processed && results.length > 0 && (
+        {processed && (
           <div className="results-layout fade-in">
             <ColumnSelector
+              allColumns={allColumns}
               visibleColumns={visibleColumns}
               onToggle={toggleColumns}
               pivotRows={pivotRows}
@@ -1495,59 +1547,75 @@ export default function Home() {
 
             <div className="results-main">
               <div className="results-header">
-                <h2>{filterLabel[filter]}</h2>
+                <h2>{filterLabel[filterType]}</h2>
                 <span className="results-badge">
-                  {filter === "both" ? "BBI + Interest" : filter.toUpperCase()}
+                  {filterType === "both"
+                    ? "BBI + Interest"
+                    : filterType.toUpperCase()}
                 </span>
-                <button className="btn-export" onClick={handleExportExcel}>
-                  📥 Export Excel
+                <button
+                  className="btn-export"
+                  onClick={handleExportExcel}
+                  disabled={exporting}
+                >
+                  {exporting ? "⏳ Exporting..." : "📥 Export Excel"}
                 </button>
-                {pivotRows.length > 0 && (
-                  <>
-                    <span className="results-badge pivot-badge">
-                      Pivot Mode
-                    </span>
-                    <button
-                      className="pivot-display-toggle"
-                      onClick={() =>
-                        setPivotDisplayMode((prev) =>
-                          prev === "nested" ? "flat" : "nested",
-                        )
-                      }
-                      title={
-                        pivotDisplayMode === "nested"
-                          ? "Switch to flat table view"
-                          : "Switch to nested tree view"
-                      }
-                    >
-                      {pivotDisplayMode === "nested"
-                        ? "⊞ Flat View"
-                        : "⊟ Nested View"}
-                    </button>
-                  </>
+                {isPivot && (
+                  <span className="results-badge pivot-badge">Pivot Mode</span>
                 )}
               </div>
 
-              <PivotTable
-                data={filteredResults}
-                visibleColumns={visibleColumns}
-                pivotRows={pivotRows}
-                pivotDisplayMode={pivotDisplayMode}
-                onDrillDown={handleDrillDown}
-                columnFilters={columnFilters}
-                onApplyFilter={handleApplyFilter}
-              />
+              {isPivot ? (
+                loadingPivot ? (
+                  <div className="loading-section">
+                    <div className="loading-spinner" />
+                    <span>Loading pivot data...</span>
+                  </div>
+                ) : (
+                  <PivotTableView
+                    pivotData={pivotData}
+                    pivotRows={pivotRows}
+                    visibleColumns={visibleColumns}
+                    allColumns={allColumns}
+                    onDrillDown={handleDrillDown}
+                  />
+                )
+              ) : (
+                <>
+                  <ResultTable
+                    data={filteredResults}
+                    visibleColumns={visibleColumns}
+                    allColumns={allColumns}
+                    columnFilters={columnFilters}
+                    onApplyFilter={handleApplyFilter}
+                    distinctValues={distinctValues}
+                  />
+                  {currentPage < totalPages && (
+                    <div className="load-more-container">
+                      <button
+                        className="btn-load-more"
+                        onClick={handleLoadMore}
+                        disabled={loadingMore}
+                      >
+                        {loadingMore
+                          ? "Loading..."
+                          : `Load More (${results.length} of ${totalRows})`}
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           </div>
         )}
 
         {/* EMPTY STATE */}
-        {!processed && !error && (
+        {!processed && !error && !processing && (
           <div className="empty-state fade-in">
             <div className="empty-state-icon">📊</div>
             <h3>No data yet</h3>
             <p>
-              Upload a TXT/CSV file with your loan data, then click{" "}
+              Upload a CSV/TXT file with your loan data, then click{" "}
               <strong>&quot;Process Cashflow&quot;</strong> to see the results.
             </p>
           </div>
