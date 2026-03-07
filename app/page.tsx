@@ -1083,6 +1083,8 @@ function ScenarioPanel({
   const selectStyle: React.CSSProperties = {
     ...inputStyle,
     minWidth: 100,
+    backgroundColor: "#1a1f3a",
+    color: "#e2e8f0",
   };
   const btnPrimary: React.CSSProperties = {
     padding: "6px 14px",
