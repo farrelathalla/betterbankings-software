@@ -24,6 +24,7 @@ import {
   listBehaviours,
   uploadBehaviour,
   deleteBehaviour,
+  updateBehaviour,
   listMappings,
   createMapping,
   deleteMapping,
@@ -957,6 +958,13 @@ function ScenarioPanel({
     behaviour_id: 0,
   });
 
+  // Edit behaviour state
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editFile, setEditFile] = useState<File | null>(null);
+  const editFileRef = useRef<HTMLInputElement>(null);
+  const [editSaving, setEditSaving] = useState(false);
+
   // Reprocess state
   const [reprocessing, setReprocessing] = useState(false);
 
@@ -1003,13 +1011,41 @@ function ScenarioPanel({
   };
 
   const handleDeleteBehaviour = async (id: number) => {
-    if (!confirm("Delete this behaviour?")) return;
+    if (
+      !confirm("Delete this behaviour? Mappings using it will also be removed.")
+    )
+      return;
     try {
       await deleteBehaviour(id);
       loadData();
     } catch (e: any) {
       setUploadMsg(`❌ ${e.message}`);
     }
+  };
+
+  const handleStartEdit = (b: Behaviour) => {
+    setEditingId(b.id);
+    setEditName(b.name);
+    setEditFile(null);
+    if (editFileRef.current) editFileRef.current.value = "";
+  };
+
+  const handleSaveEdit = async () => {
+    if (editingId === null) return;
+    setEditSaving(true);
+    try {
+      await updateBehaviour(
+        editingId,
+        editName || undefined,
+        editFile || undefined,
+      );
+      setUploadMsg(`✅ Behaviour updated`);
+      setEditingId(null);
+      loadData();
+    } catch (e: any) {
+      setUploadMsg(`❌ ${e.message}`);
+    }
+    setEditSaving(false);
   };
 
   const handleAddMapping = async () => {
@@ -1239,37 +1275,148 @@ function ScenarioPanel({
                   <div
                     key={b.id}
                     style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      padding: "6px 10px",
                       background: "rgba(255,255,255,0.02)",
                       borderRadius: 6,
+                      padding: "6px 10px",
                     }}
                   >
-                    <div
-                      style={{ display: "flex", alignItems: "center", gap: 8 }}
-                    >
-                      <span style={{ fontSize: 13 }}>{b.name}</span>
-                      {b.is_default && (
-                        <span
+                    {editingId === b.id ? (
+                      /* EDIT MODE */
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 6,
+                        }}
+                      >
+                        <div
                           style={{
-                            ...tagStyle,
-                            background: "rgba(250,204,21,0.15)",
-                            color: "#facc15",
+                            display: "flex",
+                            gap: 6,
+                            alignItems: "center",
+                            flexWrap: "wrap",
                           }}
                         >
-                          Default
-                        </span>
-                      )}
-                    </div>
-                    {!b.is_default && (
-                      <button
-                        onClick={() => handleDeleteBehaviour(b.id)}
-                        style={btnDanger}
+                          <input
+                            type="text"
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                            style={{
+                              ...inputStyle,
+                              flex: "1 1 160px",
+                              minWidth: 140,
+                            }}
+                            placeholder="Behaviour name"
+                          />
+                          <input
+                            ref={editFileRef}
+                            type="file"
+                            accept=".csv,.txt"
+                            onChange={(e) =>
+                              setEditFile(e.target.files?.[0] || null)
+                            }
+                            style={{
+                              fontSize: 12,
+                              color: "#a0aec0",
+                              flex: "0 0 auto",
+                            }}
+                          />
+                        </div>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 6,
+                            justifyContent: "flex-end",
+                          }}
+                        >
+                          <button
+                            onClick={() => setEditingId(null)}
+                            style={{
+                              padding: "4px 10px",
+                              background: "rgba(255,255,255,0.06)",
+                              border: "1px solid rgba(255,255,255,0.12)",
+                              borderRadius: 6,
+                              color: "#a0aec0",
+                              cursor: "pointer",
+                              fontSize: 12,
+                            }}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={handleSaveEdit}
+                            disabled={editSaving}
+                            style={{
+                              ...btnPrimary,
+                              padding: "4px 10px",
+                              fontSize: 12,
+                              opacity: editSaving ? 0.5 : 1,
+                            }}
+                          >
+                            {editSaving ? "Saving..." : "💾 Save"}
+                          </button>
+                        </div>
+                        {editFile && (
+                          <div style={{ fontSize: 11, color: "#667eea" }}>
+                            New file: {editFile.name} (will replace current
+                            weights)
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      /* VIEW MODE */
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                        }}
                       >
-                        ✕
-                      </button>
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                          }}
+                        >
+                          <span style={{ fontSize: 13 }}>{b.name}</span>
+                          {b.is_default && (
+                            <span
+                              style={{
+                                ...tagStyle,
+                                background: "rgba(250,204,21,0.15)",
+                                color: "#facc15",
+                              }}
+                            >
+                              Default
+                            </span>
+                          )}
+                        </div>
+                        {!b.is_default && (
+                          <div style={{ display: "flex", gap: 4 }}>
+                            <button
+                              onClick={() => handleStartEdit(b)}
+                              style={{
+                                padding: "4px 8px",
+                                background: "rgba(102,126,234,0.12)",
+                                border: "1px solid rgba(102,126,234,0.3)",
+                                borderRadius: 6,
+                                color: "#667eea",
+                                cursor: "pointer",
+                                fontSize: 12,
+                              }}
+                            >
+                              ✎ Edit
+                            </button>
+                            <button
+                              onClick={() => handleDeleteBehaviour(b.id)}
+                              style={btnDanger}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 ))}
@@ -1582,6 +1729,12 @@ export default function Home() {
   const [filterType, setFilterType] = useState<FilterType>("both");
   const [error, setError] = useState<string | null>(null);
 
+  // Result type tabs
+  const [resultTypeFilter, setResultTypeFilter] = useState<string>("all");
+  const [availableResultTypes, setAvailableResultTypes] = useState<string[]>(
+    [],
+  );
+
   // Column visibility
   const allColumns = useMemo(() => buildColumns(filterType), [filterType]);
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(
@@ -1671,6 +1824,16 @@ export default function Home() {
       .then(setSummary)
       .catch(() => {});
   }, [uploadId, filterType, processed]);
+
+  // Fetch available result types when processed
+  useEffect(() => {
+    if (!uploadId || !processed) return;
+    getFilterOptions(uploadId, "result_type")
+      .then((types) => {
+        setAvailableResultTypes(types);
+      })
+      .catch(() => {});
+  }, [uploadId, processed]);
 
   // Fetch pivot data when pivotRows change
   useEffect(() => {
@@ -1890,6 +2053,13 @@ export default function Home() {
   const filteredResults = useMemo(() => {
     let data = [...results];
 
+    // Apply result type filter
+    if (resultTypeFilter !== "all") {
+      data = data.filter(
+        (row) => (row.result_type || "Normal") === resultTypeFilter,
+      );
+    }
+
     for (const [key, fs] of Object.entries(columnFilters)) {
       const col = allColumns.find((c) => c.key === key);
       if (!col) continue;
@@ -1937,7 +2107,7 @@ export default function Home() {
     }
 
     return data;
-  }, [results, columnFilters, allColumns]);
+  }, [results, columnFilters, allColumns, resultTypeFilter]);
 
   // Drill-down: open new page with URL params
   const handleDrillDown = useCallback(
@@ -2130,8 +2300,68 @@ export default function Home() {
               getSummary(uploadId, filterType)
                 .then(setSummary)
                 .catch(() => {});
+              // Reload result types
+              getFilterOptions(uploadId, "result_type")
+                .then(setAvailableResultTypes)
+                .catch(() => {});
             }}
           />
+        )}
+
+        {/* RESULT TYPE TABS */}
+        {processed && availableResultTypes.length > 1 && (
+          <div
+            style={{
+              display: "flex",
+              gap: 0,
+              marginBottom: 12,
+              background: "rgba(255,255,255,0.03)",
+              border: "1px solid rgba(255,255,255,0.08)",
+              borderRadius: 10,
+              overflow: "hidden",
+            }}
+          >
+            <button
+              onClick={() => setResultTypeFilter("all")}
+              style={{
+                padding: "8px 16px",
+                border: "none",
+                cursor: "pointer",
+                fontSize: 13,
+                fontWeight: 600,
+                transition: "all 0.2s",
+                background:
+                  resultTypeFilter === "all"
+                    ? "linear-gradient(135deg, #667eea, #764ba2)"
+                    : "transparent",
+                color: resultTypeFilter === "all" ? "#fff" : "#94a3b8",
+              }}
+            >
+              All Results
+            </button>
+            {availableResultTypes.map((rt) => (
+              <button
+                key={rt}
+                onClick={() => setResultTypeFilter(rt)}
+                style={{
+                  padding: "8px 16px",
+                  border: "none",
+                  cursor: "pointer",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  transition: "all 0.2s",
+                  borderLeft: "1px solid rgba(255,255,255,0.06)",
+                  background:
+                    resultTypeFilter === rt
+                      ? "linear-gradient(135deg, #667eea, #764ba2)"
+                      : "transparent",
+                  color: resultTypeFilter === rt ? "#fff" : "#94a3b8",
+                }}
+              >
+                {rt}
+              </button>
+            ))}
+          </div>
         )}
 
         {/* CONTROLS */}

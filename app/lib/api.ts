@@ -512,6 +512,25 @@ export async function deleteBehaviour(id: number): Promise<void> {
   }
 }
 
+export async function updateBehaviour(
+  id: number,
+  name?: string,
+  file?: File,
+): Promise<void> {
+  const formData = new FormData();
+  if (name) formData.append("name", name);
+  if (file) formData.append("file", file);
+  const res = await fetch(`${API_BASE}/api/behaviours/${id}`, {
+    method: "PUT",
+    headers: authHeaders(),
+    body: formData,
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to update behaviour");
+  }
+}
+
 // ─── Scenario Mappings ──────────────────────────────────────
 
 export interface ScenarioMapping {
@@ -559,9 +578,7 @@ export async function deleteMapping(id: number): Promise<void> {
   if (!res.ok) throw new Error("Failed to delete mapping");
 }
 
-export async function getMappingOptions(
-  uploadId: string,
-): Promise<{
+export async function getMappingOptions(uploadId: string): Promise<{
   product_types: string[];
   ccys: string[];
   segments: string[];
