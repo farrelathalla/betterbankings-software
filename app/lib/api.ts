@@ -24,8 +24,8 @@ function authHeaders(): Record<string, string> {
 
 export async function login(
   username: string,
-  password: string
-): Promise<{ token: string; username: string; user_id: string }> {
+  password: string,
+): Promise<{ token: string; username: string; user_id: string; role: string }> {
   const res = await fetch(`${API_BASE}/api/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -38,6 +38,7 @@ export async function login(
   const data = await res.json();
   setToken(data.token);
   localStorage.setItem("bb_username", data.username);
+  localStorage.setItem("bb_role", data.role || "user");
   return data;
 }
 
@@ -72,6 +73,14 @@ export function isLoggedIn(): boolean {
 
 export function getUsername(): string {
   return localStorage.getItem("bb_username") || "";
+}
+
+export function getRole(): string {
+  return localStorage.getItem("bb_role") || "user";
+}
+
+export function isSuperAdmin(): boolean {
+  return getRole() === "superadmin";
 }
 
 // ─── Upload ──────────────────────────────────────────────────
@@ -131,7 +140,7 @@ export async function getUploadStatus(id: string): Promise<UploadStatus> {
 // Poll until completed or failed
 export async function waitForProcessing(
   id: string,
-  onProgress?: (status: UploadStatus) => void
+  onProgress?: (status: UploadStatus) => void,
 ): Promise<UploadStatus> {
   while (true) {
     const status = await getUploadStatus(id);
@@ -192,6 +201,7 @@ export interface ResultRow {
   interest_payment_frequency: number | null;
   day_count: string;
   remaining_days: number;
+  result_type: string;
   irrbb_principal: Record<string, number> | null;
   irrbb_interest: Record<string, number> | null;
   lcr_principal: Record<string, number> | null;
@@ -219,7 +229,7 @@ export interface ResultsParams {
 
 export async function getResults(
   uploadId: string,
-  params: ResultsParams = {}
+  params: ResultsParams = {},
 ): Promise<PaginatedResponse> {
   const searchParams = new URLSearchParams();
   if (params.page) searchParams.set("page", String(params.page));
@@ -232,7 +242,7 @@ export async function getResults(
 
   const res = await fetch(
     `${API_BASE}/api/results/${uploadId}?${searchParams.toString()}`,
-    { headers: authHeaders() }
+    { headers: authHeaders() },
   );
   if (!res.ok) throw new Error("Failed to fetch results");
   return res.json();
@@ -250,7 +260,7 @@ export interface SummaryResponse {
 export async function getSummary(
   uploadId: string,
   filterType: string = "both",
-  filters: Record<string, string> = {}
+  filters: Record<string, string> = {},
 ): Promise<SummaryResponse> {
   const searchParams = new URLSearchParams();
   searchParams.set("filter_type", filterType);
@@ -259,7 +269,7 @@ export async function getSummary(
 
   const res = await fetch(
     `${API_BASE}/api/results/${uploadId}/summary?${searchParams.toString()}`,
-    { headers: authHeaders() }
+    { headers: authHeaders() },
   );
   if (!res.ok) throw new Error("Failed to fetch summary");
   return res.json();
@@ -269,11 +279,11 @@ export async function getSummary(
 
 export async function getFilterOptions(
   uploadId: string,
-  column: string
+  column: string,
 ): Promise<string[]> {
   const res = await fetch(
     `${API_BASE}/api/results/${uploadId}/filter-options?column=${column}`,
-    { headers: authHeaders() }
+    { headers: authHeaders() },
   );
   if (!res.ok) return [];
   return res.json();
@@ -291,7 +301,7 @@ export async function getPivot(
   uploadId: string,
   pivotKeys: string[],
   filterType: string = "both",
-  filters: Record<string, string> = {}
+  filters: Record<string, string> = {},
 ): Promise<PivotGroup[]> {
   const searchParams = new URLSearchParams();
   searchParams.set("pivot_keys", pivotKeys.join(","));
@@ -301,7 +311,7 @@ export async function getPivot(
 
   const res = await fetch(
     `${API_BASE}/api/pivot/${uploadId}?${searchParams.toString()}`,
-    { headers: authHeaders() }
+    { headers: authHeaders() },
   );
   if (!res.ok) throw new Error("Failed to fetch pivot");
   return res.json();
@@ -312,7 +322,7 @@ export async function getPivot(
 export function getExportUrl(
   uploadId: string,
   filterType: string = "both",
-  filters: Record<string, string> = {}
+  filters: Record<string, string> = {},
 ): string {
   const searchParams = new URLSearchParams();
   searchParams.set("filter_type", filterType);
@@ -328,7 +338,7 @@ export function getExportUrl(
 export async function downloadExport(
   uploadId: string,
   filterType: string = "both",
-  filters: Record<string, string> = {}
+  filters: Record<string, string> = {},
 ) {
   const url = getExportUrl(uploadId, filterType, filters);
   // Use fetch with auth header instead of direct link
@@ -375,3 +385,204 @@ export const IRRBB_LABELS = [
 
 export const LCR_LABELS = ["≤30D", ">30D"];
 export const NSFR_LABELS = ["<6M", "6-12M", ">12M"];
+
+// ─── Reference Tables (Superadmin) ──────────────────────────
+
+export interface ReferenceItem {
+  id: string;
+  name: string;
+}
+
+export async function listReference(table: string): Promise<ReferenceItem[]> {
+  const res = await fetch(`${API_BASE}/api/reference/${table}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to list reference");
+  return res.json();
+}
+
+export async function createReference(
+  table: string,
+  item: ReferenceItem,
+): Promise<ReferenceItem> {
+  const res = await fetch(`${API_BASE}/api/reference/${table}`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(item),
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to create");
+  }
+  return res.json();
+}
+
+export async function updateReference(
+  table: string,
+  id: string,
+  item: Partial<ReferenceItem>,
+): Promise<ReferenceItem> {
+  const res = await fetch(`${API_BASE}/api/reference/${table}/${id}`, {
+    method: "PUT",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(item),
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to update");
+  }
+  return res.json();
+}
+
+export async function deleteReference(
+  table: string,
+  id: string,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/reference/${table}/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to delete");
+}
+
+// ─── Behaviours ─────────────────────────────────────────────
+
+export interface Behaviour {
+  id: number;
+  upload_id: string | null;
+  name: string;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+  buckets?: BehaviourBucket[];
+}
+
+export interface BehaviourBucket {
+  id?: number;
+  behaviour_id: number;
+  bucket_type: string;
+  bucket_name: string;
+  percentage: number;
+}
+
+export async function uploadBehaviour(
+  uploadId: string,
+  file: File,
+  name: string,
+): Promise<{ id: number; name: string; buckets: number }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("name", name);
+  const res = await fetch(`${API_BASE}/api/uploads/${uploadId}/behaviours`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: formData,
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to upload behaviour");
+  }
+  return res.json();
+}
+
+export async function listBehaviours(uploadId: string): Promise<Behaviour[]> {
+  const res = await fetch(`${API_BASE}/api/uploads/${uploadId}/behaviours`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to list behaviours");
+  return res.json();
+}
+
+export async function getBehaviour(id: number): Promise<Behaviour> {
+  const res = await fetch(`${API_BASE}/api/behaviours/${id}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to get behaviour");
+  return res.json();
+}
+
+export async function deleteBehaviour(id: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/behaviours/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to delete behaviour");
+  }
+}
+
+// ─── Scenario Mappings ──────────────────────────────────────
+
+export interface ScenarioMapping {
+  id: number;
+  upload_id: string;
+  product_type: string;
+  ccy: string;
+  segment: string;
+  transactional: string;
+  behaviour_id: number;
+  behaviour_name?: string;
+}
+
+export async function listMappings(
+  uploadId: string,
+): Promise<ScenarioMapping[]> {
+  const res = await fetch(`${API_BASE}/api/uploads/${uploadId}/mappings`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to list mappings");
+  return res.json();
+}
+
+export async function createMapping(
+  uploadId: string,
+  mapping: Omit<ScenarioMapping, "id" | "upload_id" | "behaviour_name">,
+): Promise<ScenarioMapping> {
+  const res = await fetch(`${API_BASE}/api/uploads/${uploadId}/mappings`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(mapping),
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to create mapping");
+  }
+  return res.json();
+}
+
+export async function deleteMapping(id: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/mappings/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to delete mapping");
+}
+
+export async function getMappingOptions(
+  uploadId: string,
+): Promise<{
+  product_types: string[];
+  ccys: string[];
+  segments: string[];
+  transactionals: string[];
+}> {
+  const res = await fetch(
+    `${API_BASE}/api/uploads/${uploadId}/mapping-options`,
+    {
+      headers: authHeaders(),
+    },
+  );
+  if (!res.ok) throw new Error("Failed to get mapping options");
+  return res.json();
+}
+
+// ─── Reprocess ──────────────────────────────────────────────
+
+export async function reprocessUpload(uploadId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/uploads/${uploadId}/reprocess`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to trigger reprocess");
+}

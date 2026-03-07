@@ -13,6 +13,7 @@ import {
   isLoggedIn,
   logout,
   getUsername,
+  isSuperAdmin,
   uploadCSV,
   waitForProcessing,
   getResults,
@@ -20,11 +21,21 @@ import {
   downloadExport,
   getPivot,
   getFilterOptions,
+  listBehaviours,
+  uploadBehaviour,
+  deleteBehaviour,
+  listMappings,
+  createMapping,
+  deleteMapping,
+  getMappingOptions,
+  reprocessUpload,
   UploadStatus,
   ResultRow,
   PivotGroup as APIPivotGroup,
   SummaryResponse,
   ValidationError,
+  Behaviour,
+  ScenarioMapping,
   IRRBB_LABELS,
   LCR_LABELS,
   NSFR_LABELS,
@@ -63,7 +74,7 @@ function getBucketValue(
   row: ResultRow,
   bucketType: "irrbb" | "lcr" | "nsfr",
   label: string,
-  filterType: FilterType
+  filterType: FilterType,
 ): number {
   const pKey = `${bucketType}_principal` as keyof ResultRow;
   const iKey = `${bucketType}_interest` as keyof ResultRow;
@@ -201,6 +212,13 @@ function buildColumns(filterType: FilterType): ColDef[] {
       type: "input",
       getValue: (r) => r.day_count,
     },
+    {
+      key: "result_type",
+      label: "Result Type",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.result_type || "Normal",
+    },
   ];
 
   const remDays: ColDef = {
@@ -256,6 +274,7 @@ const INPUT_KEYS = [
   "method",
   "interest_payment_frequency",
   "day_count",
+  "result_type",
 ];
 
 const PIVOTABLE_KEYS = [
@@ -270,6 +289,7 @@ const PIVOTABLE_KEYS = [
   "insured_or_uninsured",
   "transactional_or_non",
   "method",
+  "result_type",
 ];
 
 function getColumnGroups(allColumns: ColDef[]) {
@@ -332,7 +352,7 @@ function getDefaultFilterState(): ColumnFilterState {
 
 function isFilterActive(
   fs: ColumnFilterState | undefined,
-  allValues: string[]
+  allValues: string[],
 ): boolean {
   if (!fs) return false;
   if (fs.sortDirection !== null) return true;
@@ -371,7 +391,7 @@ function FilterDropdown({
     selectedValues: new Set(
       filterState.selectedValues.size > 0
         ? filterState.selectedValues
-        : allValues
+        : allValues,
     ),
   }));
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -390,11 +410,11 @@ function FilterDropdown({
   }, [onClose]);
 
   const filteredValues = allValues.filter((v) =>
-    v.toLowerCase().includes(localState.searchText.toLowerCase())
+    v.toLowerCase().includes(localState.searchText.toLowerCase()),
   );
 
   const allSelected = filteredValues.every((v) =>
-    localState.selectedValues.has(v)
+    localState.selectedValues.has(v),
   );
 
   const toggleSelectAll = () => {
@@ -706,7 +726,7 @@ function FilterableHeader({
       }
       setOpen(!open);
     },
-    [open]
+    [open],
   );
 
   return (
@@ -735,7 +755,7 @@ function FilterableHeader({
             posTop={dropdownPos.top}
             posLeft={dropdownPos.left}
           />,
-          document.body
+          document.body,
         )}
     </th>
   );
@@ -744,7 +764,7 @@ function FilterableHeader({
 function getGroupBorderClass(
   col: ColDef,
   visibleCols: ColDef[],
-  idx: number
+  idx: number,
 ): string {
   if (idx === 0) return "";
   const prevGroup = visibleCols[idx - 1]?.group;
@@ -802,8 +822,8 @@ function ResultTable({
                       ? col.key === "interest_rate"
                         ? formatPercent(val)
                         : col.key === "remaining_days"
-                        ? val
-                        : formatNumber(val)
+                          ? val
+                          : formatNumber(val)
                       : val}
                   </td>
                 );
@@ -888,8 +908,8 @@ function PivotTableView({
                     {rc.key === "interest_rate"
                       ? formatPercent(val / (group.count || 1))
                       : rc.key === "remaining_days"
-                      ? Math.round(val)
-                      : formatNumber(val)}
+                        ? Math.round(val)
+                        : formatNumber(val)}
                   </td>
                 );
               })}
@@ -917,7 +937,7 @@ export default function Home() {
   const [processing, setProcessing] = useState(false);
   const [processProgress, setProcessProgress] = useState("");
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>(
-    []
+    [],
   );
 
   // Results
@@ -935,7 +955,7 @@ export default function Home() {
   // Column visibility
   const allColumns = useMemo(() => buildColumns(filterType), [filterType]);
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(
-    () => new Set(buildColumns("both").map((c) => c.key))
+    () => new Set(buildColumns("both").map((c) => c.key)),
   );
 
   // Pivot
@@ -1068,7 +1088,7 @@ export default function Home() {
       const f = e.dataTransfer.files[0];
       if (f) handleFile(f);
     },
-    [handleFile]
+    [handleFile],
   );
 
   const handleRemoveFile = useCallback(() => {
@@ -1110,10 +1130,10 @@ export default function Home() {
         (status: UploadStatus) => {
           if (status.status === "processing") {
             setProcessProgress(
-              `Processing... ${status.total_rows} rows queued`
+              `Processing... ${status.total_rows} rows queued`,
             );
           }
-        }
+        },
       );
 
       if (finalStatus.status === "failed") {
@@ -1186,7 +1206,7 @@ export default function Home() {
         // ignore
       }
     },
-    [uploadId, processed]
+    [uploadId, processed],
   );
 
   const handleDownloadSample = useCallback(() => {
@@ -1233,7 +1253,7 @@ export default function Home() {
         return next;
       });
     },
-    []
+    [],
   );
 
   // Apply client-side filters on loaded data
@@ -1268,7 +1288,7 @@ export default function Home() {
     }
 
     const sortEntries = Object.entries(columnFilters).filter(
-      ([, fs]) => fs.sortDirection !== null
+      ([, fs]) => fs.sortDirection !== null,
     );
     if (sortEntries.length > 0) {
       const [sortKey, sortFs] = sortEntries[sortEntries.length - 1];
@@ -1300,7 +1320,7 @@ export default function Home() {
       params.set("columns", JSON.stringify(Array.from(visibleColumns)));
       window.open(`/drilldown?${params.toString()}`, "_blank");
     },
-    [uploadId, filterType, visibleColumns]
+    [uploadId, filterType, visibleColumns],
   );
 
   // Export Excel via BE
@@ -1355,6 +1375,11 @@ export default function Home() {
           <a href="/history" className="btn-sample header-nav-link">
             📂 History
           </a>
+          {isSuperAdmin() && (
+            <a href="/admin" className="btn-sample header-nav-link">
+              ⚙ Admin
+            </a>
+          )}
           <div className="header-user">
             <span className="header-username">{getUsername()}</span>
             <button className="btn-logout" onClick={handleLogout}>
