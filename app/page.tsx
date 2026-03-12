@@ -922,243 +922,6 @@ function PivotTableView({
 }
 
 /* ============================================================ */
-/*  SCENARIOS SECTION                                           */
-/* ============================================================ */
-function ScenariosSection({
-  uploadId,
-  onUpdate,
-}: {
-  uploadId: string;
-  onUpdate: () => void;
-}) {
-  const [behaviours, setBehaviours] = useState<Behaviour[]>([]);
-  const [isAdding, setIsAdding] = useState(false);
-  const [newScenarioName, setNewScenarioName] = useState("");
-  const [newScenarioFile, setNewScenarioFile] = useState<File | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const list = await listBehaviours(uploadId);
-      setBehaviours(list.filter((b) => !b.is_default));
-    } catch (err) {
-      console.error(err);
-    }
-  }, [uploadId]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const handleAdd = async () => {
-    if (!newScenarioName || !newScenarioFile) {
-      setError("Name and file are required");
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      await uploadBehaviour(uploadId, newScenarioFile, newScenarioName);
-      await reprocessUpload(uploadId);
-      setNewScenarioName("");
-      setNewScenarioFile(null);
-      setIsAdding(false);
-      load();
-      onUpdate();
-    } catch (err: any) {
-      setError(err.message || "Failed to add scenario");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDelete = async (id: number) => {
-    if (!confirm("Delete this scenario?")) return;
-    try {
-      await deleteBehaviour(id);
-      await reprocessUpload(uploadId);
-      load();
-      onUpdate();
-    } catch (err) {
-      alert("Failed to delete scenario");
-    }
-  };
-
-  return (
-    <div
-      className="scenarios-section fade-in"
-      style={{
-        background: "rgba(255,255,255,0.03)",
-        border: "1px solid rgba(255,255,255,0.08)",
-        borderRadius: 12,
-        padding: 16,
-        marginBottom: 16,
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 12,
-        }}
-      >
-        <h3
-          style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "#94a3b8" }}
-        >
-          Scenarios
-        </h3>
-        <button
-          onClick={() => setIsAdding(!isAdding)}
-          style={{
-            background: isAdding
-              ? "rgba(239,68,68,0.1)"
-              : "rgba(102,126,234,0.1)",
-            color: isAdding ? "#ef4444" : "#667eea",
-            border: `1px solid ${isAdding ? "rgba(239,68,68,0.2)" : "rgba(102,126,234,0.2)"}`,
-            borderRadius: "50%",
-            width: 24,
-            height: 24,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 14,
-            fontWeight: "bold",
-          }}
-        >
-          {isAdding ? "✕" : "+"}
-        </button>
-      </div>
-
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-        {behaviours.map((b) => (
-          <div
-            key={b.id}
-            style={{
-              background: "rgba(102,126,234,0.1)",
-              padding: "4px 10px",
-              borderRadius: 20,
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              border: "1px solid rgba(102,126,234,0.2)",
-            }}
-          >
-            <span style={{ fontSize: 12, color: "#e2e8f0" }}>{b.name}</span>
-            <button
-              onClick={() => handleDelete(b.id)}
-              style={{
-                background: "transparent",
-                border: "none",
-                color: "#94a3b8",
-                cursor: "pointer",
-                padding: 0,
-                fontSize: 10,
-                marginTop: 1,
-              }}
-            >
-              ✕
-            </button>
-          </div>
-        ))}
-        {behaviours.length === 0 && !isAdding && (
-          <div style={{ color: "#64748b", fontSize: 12, fontStyle: "italic" }}>
-            No scenarios added
-          </div>
-        )}
-      </div>
-
-      {isAdding && (
-        <div
-          className="fade-in"
-          style={{
-            marginTop: 16,
-            borderTop: "1px solid rgba(255,255,255,0.06)",
-            paddingTop: 16,
-          }}
-        >
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <input
-              type="text"
-              placeholder="Scenario Name (e.g. COVID-19)"
-              value={newScenarioName}
-              onChange={(e) => setNewScenarioName(e.target.value)}
-              style={{
-                padding: "8px 12px",
-                background: "rgba(255,255,255,0.05)",
-                border: "1px solid rgba(255,255,255,0.1)",
-                borderRadius: 8,
-                color: "#fff",
-                fontSize: 13,
-                outline: "none",
-              }}
-            />
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <input
-                type="file"
-                accept=".csv"
-                onChange={(e) =>
-                  setNewScenarioFile(e.target.files?.[0] || null)
-                }
-                style={{ fontSize: 12, color: "#94a3b8" }}
-              />
-              <span style={{ fontSize: 11, color: "#64748b" }}>
-                2-section CSV
-              </span>
-            </div>
-            {error && (
-              <div style={{ color: "#ef4444", fontSize: 12 }}>{error}</div>
-            )}
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                justifyContent: "flex-end",
-                marginTop: 4,
-              }}
-            >
-              <button
-                onClick={() => setIsAdding(false)}
-                style={{
-                  padding: "6px 14px",
-                  background: "transparent",
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  borderRadius: 8,
-                  color: "#94a3b8",
-                  cursor: "pointer",
-                  fontSize: 13,
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleAdd}
-                disabled={loading}
-                style={{
-                  padding: "6px 14px",
-                  background: "linear-gradient(135deg, #667eea, #764ba2)",
-                  border: "none",
-                  borderRadius: 8,
-                  color: "#fff",
-                  cursor: "pointer",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  opacity: loading ? 0.6 : 1,
-                }}
-              >
-                {loading ? "Adding..." : "Add Scenario"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ============================================================ */
 /*  MAIN PAGE                                                   */
 /* ============================================================ */
 export default function Home() {
@@ -1190,10 +953,11 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
 
   // Result type tabs
-  const [resultTypeFilter, setResultTypeFilter] = useState<string>("all");
-  const [availableResultTypes, setAvailableResultTypes] = useState<string[]>(
-    [],
+  const [activeBehaviourId, setActiveBehaviourId] = useState<number | null>(
+    null,
   );
+  const [scenarios, setScenarios] = useState<Behaviour[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Column visibility
   const allColumns = useMemo(() => buildColumns(filterType), [filterType]);
@@ -1233,33 +997,27 @@ export default function Home() {
       if (existingUploadId) {
         // Remove from URL to keep it clean
         window.history.replaceState({}, "", "/");
-        // Load results from existing upload
         setUploadId(existingUploadId);
-        setProcessing(true);
-        setProcessProgress("Loading results...");
-        getResults(existingUploadId, {
-          page: 1,
-          limit: 20,
-          filter_type: filterType,
-        })
-          .then((pageData) => {
-            setResults(pageData.data || []);
-            setTotalRows(pageData.total);
-            setCurrentPage(1);
-            setTotalPages(pageData.total_pages);
-            setProcessed(true);
-            setProcessing(false);
-            setProcessProgress("");
-          })
-          .catch((err) => {
-            setError((err as Error).message);
-            setProcessing(false);
-            setProcessProgress("");
-          });
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Fetch Scenarios
+  const fetchScenarios = useCallback(async () => {
+    if (!uploadId) return;
+    try {
+      const list = await listBehaviours(uploadId);
+      setScenarios(list);
+    } catch {
+      // ignore
+    }
+  }, [uploadId]);
+
+  useEffect(() => {
+    if (uploadId && processed) {
+      fetchScenarios();
+    }
+  }, [uploadId, processed, fetchScenarios]);
 
   // Fetch distinct values for visible input columns when we have results
   useEffect(() => {
@@ -1277,35 +1035,54 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uploadId, processed, visibleColumns]);
 
-  // Fetch summary when uploadId or filterType changes
+  // Fetch results when uploadId, filterType, or activeBehaviourId changes
+  const loadResults = useCallback(async () => {
+    if (!uploadId) return;
+    setProcessing(true);
+    setProcessProgress("Loading results...");
+    try {
+      const pageData = await getResults(uploadId, {
+        page: 1,
+        limit: 20,
+        filter_type: filterType,
+        behaviour_id: activeBehaviourId,
+      });
+      setResults(pageData.data || []);
+      setTotalRows(pageData.total);
+      setCurrentPage(1);
+      setTotalPages(pageData.total_pages);
+      setProcessed(true);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setProcessing(false);
+      setProcessProgress("");
+    }
+  }, [uploadId, filterType, activeBehaviourId]);
+
+  useEffect(() => {
+    if (uploadId) loadResults();
+  }, [loadResults, uploadId]);
+
+  // Fetch summary when uploadId, filterType, or activeBehaviourId changes
   useEffect(() => {
     if (!uploadId || !processed) return;
-    getSummary(uploadId, filterType)
+    getSummary(uploadId, filterType, {}, activeBehaviourId)
       .then(setSummary)
       .catch(() => {});
-  }, [uploadId, filterType, processed]);
+  }, [uploadId, filterType, processed, activeBehaviourId]);
 
-  // Fetch available result types when processed
-  useEffect(() => {
-    if (!uploadId || !processed) return;
-    getFilterOptions(uploadId, "result_type")
-      .then((types) => {
-        setAvailableResultTypes(types);
-      })
-      .catch(() => {});
-  }, [uploadId, processed]);
-
-  // Fetch pivot data when pivotRows change
+  // Fetch pivot data when pivotRows or activeBehaviourId change
   useEffect(() => {
     if (!uploadId || !processed || pivotRows.length === 0) return;
     setLoadingPivot(true);
-    getPivot(uploadId, pivotRows, filterType)
+    getPivot(uploadId, pivotRows, filterType, {}, activeBehaviourId)
       .then((data) => {
         setPivotData(data);
         setLoadingPivot(false);
       })
       .catch(() => setLoadingPivot(false));
-  }, [uploadId, processed, pivotRows, filterType]);
+  }, [uploadId, processed, pivotRows, filterType, activeBehaviourId]);
 
   // ─── Handlers ──────────────────────────────────────────────
   const handleLoginSuccess = useCallback(() => {
@@ -1397,19 +1174,8 @@ export default function Home() {
       }
 
       setProcessProgress("Loading results...");
-      const pageData = await getResults(uploadRes.id, {
-        page: 1,
-        limit: 20,
-        filter_type: filterType,
-      });
-
-      setResults(pageData.data || []);
-      setTotalRows(pageData.total);
-      setCurrentPage(1);
-      setTotalPages(pageData.total_pages);
-      setProcessed(true);
-      setProcessing(false);
-      setProcessProgress("");
+      await loadResults();
+      await fetchScenarios();
     } catch (err: unknown) {
       const error = err as Error & { validationErrors?: ValidationError[] };
       if (error.validationErrors) {
@@ -1431,6 +1197,7 @@ export default function Home() {
         page: nextPage,
         limit: 20,
         filter_type: filterType,
+        behaviour_id: activeBehaviourId,
       });
       setResults((prev) => [...prev, ...(pageData.data || [])]);
       setCurrentPage(nextPage);
@@ -1513,13 +1280,6 @@ export default function Home() {
   const filteredResults = useMemo(() => {
     let data = [...results];
 
-    // Apply result type filter
-    if (resultTypeFilter !== "all") {
-      data = data.filter(
-        (row) => (row.result_type || "Normal") === resultTypeFilter,
-      );
-    }
-
     for (const [key, fs] of Object.entries(columnFilters)) {
       const col = allColumns.find((c) => c.key === key);
       if (!col) continue;
@@ -1567,7 +1327,7 @@ export default function Home() {
     }
 
     return data;
-  }, [results, columnFilters, allColumns, resultTypeFilter]);
+  }, [results, columnFilters, allColumns]);
 
   // Drill-down: open new page with URL params
   const handleDrillDown = useCallback(
@@ -1588,12 +1348,90 @@ export default function Home() {
     if (!uploadId) return;
     setExporting(true);
     try {
-      await downloadExport(uploadId, filterType);
+      await downloadExport(uploadId, filterType, {}, activeBehaviourId);
     } catch (err) {
       setError((err as Error).message);
     }
     setExporting(false);
-  }, [uploadId, filterType]);
+  }, [uploadId, filterType, activeBehaviourId]);
+
+  // Scenario Handlers
+  const handleAddScenario = async () => {
+    const name = prompt("Enter Scenario Name:");
+    if (!name) return;
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".csv";
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      try {
+        setRefreshing(true);
+        const res = await uploadBehaviour(uploadId!, file, name);
+        await reprocessUpload(uploadId!);
+        await fetchScenarios();
+        setActiveBehaviourId(res.id);
+        alert("Scenario added and reprocessed.");
+      } catch (err: any) {
+        alert(err.message);
+      } finally {
+        setRefreshing(false);
+      }
+    };
+    input.click();
+  };
+
+  const handleEditScenario = async (id: number) => {
+    const sc = scenarios.find((s) => s.id === id);
+    if (!sc) return;
+    const newName = prompt("Rename Scenario:", sc.name);
+    if (newName === null) return;
+    try {
+      setRefreshing(true);
+      await updateBehaviour(id, newName);
+      await fetchScenarios();
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const handleRefreshScenario = async (id: number) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".csv";
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      try {
+        setRefreshing(true);
+        await updateBehaviour(id, undefined, file);
+        await reprocessUpload(uploadId!);
+        alert("Scenario file updated and reprocessed.");
+        loadResults();
+      } catch (err: any) {
+        alert(err.message);
+      } finally {
+        setRefreshing(false);
+      }
+    };
+    input.click();
+  };
+
+  const handleDeleteScenario = async (id: number) => {
+    if (!confirm("Are you sure you want to delete this scenario?")) return;
+    try {
+      setRefreshing(true);
+      await deleteBehaviour(id);
+      if (activeBehaviourId === id) setActiveBehaviourId(null);
+      await fetchScenarios();
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const filterLabel: Record<FilterType, string> = {
     bbi: "Installment Cashflow BBI",
@@ -1739,87 +1577,68 @@ export default function Home() {
           </div>
         )}
 
-        {/* SCENARIOS SECTION */}
+        {/* Tab Bar */}
         {processed && uploadId && (
-          <ScenariosSection
-            uploadId={uploadId}
-            onUpdate={() => {
-              // Reload results
-              getResults(uploadId, {
-                page: 1,
-                limit: 20,
-                result_type:
-                  resultTypeFilter === "all" ? undefined : resultTypeFilter,
-              }).then((pageData) => {
-                setResults(pageData.data || []);
-                setTotalRows(pageData.total);
-                setCurrentPage(1);
-                setTotalPages(pageData.total_pages);
-                setDistinctValues({});
-              });
-              getSummary(uploadId, filterType)
-                .then(setSummary)
-                .catch(() => {});
-              getFilterOptions(uploadId, "result_type")
-                .then(setAvailableResultTypes)
-                .catch(() => {});
-            }}
-          />
-        )}
-
-        {/* RESULT TYPE TABS */}
-        {processed && availableResultTypes.length > 1 && (
-          <div
-            style={{
-              display: "flex",
-              gap: 0,
-              marginBottom: 12,
-              background: "rgba(255,255,255,0.03)",
-              border: "1px solid rgba(255,255,255,0.08)",
-              borderRadius: 10,
-              overflow: "hidden",
-            }}
-          >
-            <button
-              onClick={() => setResultTypeFilter("all")}
-              style={{
-                padding: "8px 16px",
-                border: "none",
-                cursor: "pointer",
-                fontSize: 13,
-                fontWeight: 600,
-                transition: "all 0.2s",
-                background:
-                  resultTypeFilter === "all"
-                    ? "linear-gradient(135deg, #667eea, #764ba2)"
-                    : "transparent",
-                color: resultTypeFilter === "all" ? "#fff" : "#94a3b8",
-              }}
-            >
-              All Results
-            </button>
-            {availableResultTypes.map((rt) => (
+          <div className="scenario-tabs-container scale-in">
+            <div className="scenario-tabs">
               <button
-                key={rt}
-                onClick={() => setResultTypeFilter(rt)}
+                className={`scenario-tab ${activeBehaviourId === null ? "active" : ""}`}
+                onClick={() => setActiveBehaviourId(null)}
+              >
+                All Results
+              </button>
+              {scenarios.map((sc) => (
+                <button
+                  key={sc.id}
+                  className={`scenario-tab ${activeBehaviourId === sc.id ? "active" : ""}`}
+                  onClick={() => setActiveBehaviourId(sc.id)}
+                >
+                  {sc.name}
+                </button>
+              ))}
+              <button
+                className="scenario-tab-add"
+                onClick={handleAddScenario}
+                title="Add Scenario"
+              >
+                +
+              </button>
+            </div>
+
+            {activeBehaviourId !== null && (
+              <div className="scenario-controls">
+                <button
+                  className="btn-sc-control"
+                  onClick={() => handleEditScenario(activeBehaviourId)}
+                >
+                  ✏️ Edit Name
+                </button>
+                <button
+                  className="btn-sc-control"
+                  onClick={() => handleRefreshScenario(activeBehaviourId)}
+                >
+                  🔄 Refresh File
+                </button>
+                <button
+                  className="btn-sc-control btn-sc-delete"
+                  onClick={() => handleDeleteScenario(activeBehaviourId)}
+                >
+                  🗑️ Delete
+                </button>
+              </div>
+            )}
+            {refreshing && (
+              <div
                 style={{
-                  padding: "8px 16px",
-                  border: "none",
-                  cursor: "pointer",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  transition: "all 0.2s",
-                  borderLeft: "1px solid rgba(255,255,255,0.06)",
-                  background:
-                    resultTypeFilter === rt
-                      ? "linear-gradient(135deg, #667eea, #764ba2)"
-                      : "transparent",
-                  color: resultTypeFilter === rt ? "#fff" : "#94a3b8",
+                  padding: "0.5rem",
+                  color: "#fb923c",
+                  fontWeight: "bold",
+                  fontSize: "0.8rem",
                 }}
               >
-                {rt}
-              </button>
-            ))}
+                ⌛ Processing changes...
+              </div>
+            )}
           </div>
         )}
 
