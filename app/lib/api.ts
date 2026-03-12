@@ -181,7 +181,17 @@ export async function deleteUpload(id: string): Promise<void> {
 
 // ─── Results ─────────────────────────────────────────────────
 
+export interface ResultsParams {
+  page?: number;
+  limit?: number;
+  filter_type?: string;
+  result_type?: string;
+  filters?: string; // JSON string of Record<string, string[]>
+}
+
 export interface ResultRow {
+  id: number;
+  upload_id: string;
   row_number: number;
   reporting_date: string;
   account_id: string;
@@ -202,49 +212,39 @@ export interface ResultRow {
   day_count: string;
   remaining_days: number;
   result_type: string;
-  irrbb_principal: Record<string, number> | null;
-  irrbb_interest: Record<string, number> | null;
-  lcr_principal: Record<string, number> | null;
-  lcr_interest: Record<string, number> | null;
-  nsfr_principal: Record<string, number> | null;
-  nsfr_interest: Record<string, number> | null;
+  // Principal buckets
+  lcr_principal: Record<string, number>;
+  nsfr_principal: Record<string, number>;
+  irrbb_principal: Record<string, number>;
+  ilaap_principal: Record<string, number>;
+  // Interest buckets
+  lcr_interest: Record<string, number>;
+  nsfr_interest: Record<string, number>;
+  irrbb_interest: Record<string, number>;
+  ilaap_interest: Record<string, number>;
 }
 
 export interface PaginatedResponse {
   data: ResultRow[];
   total: number;
-  page: number;
-  limit: number;
   total_pages: number;
-}
-
-export interface ResultsParams {
-  page?: number;
-  limit?: number;
-  filter_type?: string; // bbi | interest | both
-  sort_by?: string;
-  sort_dir?: string;
-  filters?: Record<string, string>;
 }
 
 export async function getResults(
   uploadId: string,
-  params: ResultsParams = {},
-): Promise<PaginatedResponse> {
-  const searchParams = new URLSearchParams();
-  if (params.page) searchParams.set("page", String(params.page));
-  if (params.limit) searchParams.set("limit", String(params.limit));
-  if (params.filter_type) searchParams.set("filter_type", params.filter_type);
-  if (params.sort_by) searchParams.set("sort_by", params.sort_by);
-  if (params.sort_dir) searchParams.set("sort_dir", params.sort_dir);
-  if (params.filters)
-    searchParams.set("filters", JSON.stringify(params.filters));
+  params: ResultsParams,
+): Promise<{ data: ResultRow[]; total: number; total_pages: number }> {
+  const q = new URLSearchParams();
+  if (params.page) q.set("page", String(params.page));
+  if (params.limit) q.set("limit", String(params.limit));
+  if (params.filter_type) q.set("filter_type", params.filter_type);
+  if (params.result_type) q.set("result_type", params.result_type);
+  if (params.filters) q.set("filters", params.filters);
 
-  const res = await fetch(
-    `${API_BASE}/api/results/${uploadId}?${searchParams.toString()}`,
-    { headers: authHeaders() },
-  );
-  if (!res.ok) throw new Error("Failed to fetch results");
+  const res = await fetch(`${API_BASE}/api/uploads/${uploadId}/results?${q}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to get results");
   return res.json();
 }
 
@@ -363,28 +363,28 @@ export async function downloadExport(
 // ─── Bucket Labels (for UI rendering) ───────────────────────
 
 export const IRRBB_LABELS = [
-  "≤ 1 bulan",
-  "1-3 bulan",
-  "3-6 bulan",
-  "6-9 bulan",
-  "9-12 bulan",
-  "1-1.5Y",
-  "1.5-2Y",
-  "2-3Y",
-  "3-4Y",
-  "4-5Y",
-  "5-6Y",
-  "6-7Y",
-  "7-8Y",
-  "8-9Y",
-  "9-10Y",
-  "10-15Y",
-  "15-20Y",
+  "≤ 1 M",
+  "1M ≤ 3M",
+  "3M ≤ 6M",
+  "6M ≤ 9M",
+  "9M ≤ 1Y",
+  "1Y ≤ 1.5Y",
+  "1.5Y ≤ 2Y",
+  "2Y ≤ 3Y",
+  "3Y ≤ 4Y",
+  "4Y ≤ 5Y",
+  "5Y ≤ 6Y",
+  "6Y ≤ 7Y",
+  "7Y ≤ 8Y",
+  "8Y ≤ 9Y",
+  "9Y ≤ 10Y",
+  "10Y ≤ 15Y",
+  "15Y ≤ 20Y",
   "> 20Y",
 ];
 
-export const LCR_LABELS = ["≤30D", ">30D"];
-export const NSFR_LABELS = ["<6M", "6-12M", ">12M"];
+export const LCR_LABELS = ["CF <= 30D", "CF > 30D"];
+export const NSFR_LABELS = ["CF < 6M", "CF 6M to 12M", "CF > 12M"];
 
 // ─── Reference Tables (Superadmin) ──────────────────────────
 
@@ -452,6 +452,7 @@ export interface Behaviour {
   upload_id: string | null;
   name: string;
   is_default: boolean;
+  is_scenario: boolean;
   created_at: string;
   updated_at: string;
   buckets?: BehaviourBucket[];
@@ -465,11 +466,19 @@ export interface BehaviourBucket {
   percentage: number;
 }
 
+export async function listBehaviours(uploadId: string): Promise<Behaviour[]> {
+  const res = await fetch(`${API_BASE}/api/uploads/${uploadId}/behaviours`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to list behaviours");
+  return res.json();
+}
+
 export async function uploadBehaviour(
   uploadId: string,
   file: File,
   name: string,
-): Promise<{ id: number; name: string; buckets: number }> {
+): Promise<{ id: number; buckets: number }> {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("name", name);
@@ -482,14 +491,6 @@ export async function uploadBehaviour(
     const data = await res.json();
     throw new Error(data.error || "Failed to upload behaviour");
   }
-  return res.json();
-}
-
-export async function listBehaviours(uploadId: string): Promise<Behaviour[]> {
-  const res = await fetch(`${API_BASE}/api/uploads/${uploadId}/behaviours`, {
-    headers: authHeaders(),
-  });
-  if (!res.ok) throw new Error("Failed to list behaviours");
   return res.json();
 }
 
@@ -531,68 +532,7 @@ export async function updateBehaviour(
   }
 }
 
-// ─── Scenario Mappings ──────────────────────────────────────
-
-export interface ScenarioMapping {
-  id: number;
-  upload_id: string;
-  product_type: string;
-  ccy: string;
-  segment: string;
-  transactional: string;
-  behaviour_id: number;
-  behaviour_name?: string;
-}
-
-export async function listMappings(
-  uploadId: string,
-): Promise<ScenarioMapping[]> {
-  const res = await fetch(`${API_BASE}/api/uploads/${uploadId}/mappings`, {
-    headers: authHeaders(),
-  });
-  if (!res.ok) throw new Error("Failed to list mappings");
-  return res.json();
-}
-
-export async function createMapping(
-  uploadId: string,
-  mapping: Omit<ScenarioMapping, "id" | "upload_id" | "behaviour_name">,
-): Promise<ScenarioMapping> {
-  const res = await fetch(`${API_BASE}/api/uploads/${uploadId}/mappings`, {
-    method: "POST",
-    headers: { ...authHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify(mapping),
-  });
-  if (!res.ok) {
-    const data = await res.json();
-    throw new Error(data.error || "Failed to create mapping");
-  }
-  return res.json();
-}
-
-export async function deleteMapping(id: number): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/mappings/${id}`, {
-    method: "DELETE",
-    headers: authHeaders(),
-  });
-  if (!res.ok) throw new Error("Failed to delete mapping");
-}
-
-export async function getMappingOptions(uploadId: string): Promise<{
-  product_types: string[];
-  ccys: string[];
-  segments: string[];
-  transactionals: string[];
-}> {
-  const res = await fetch(
-    `${API_BASE}/api/uploads/${uploadId}/mapping-options`,
-    {
-      headers: authHeaders(),
-    },
-  );
-  if (!res.ok) throw new Error("Failed to get mapping options");
-  return res.json();
-}
+// Scenario Mappings - DEPRECATED (Moved to 2-section scenario CSV)
 
 // ─── Reprocess ──────────────────────────────────────────────
 

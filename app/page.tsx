@@ -25,10 +25,6 @@ import {
   uploadBehaviour,
   deleteBehaviour,
   updateBehaviour,
-  listMappings,
-  createMapping,
-  deleteMapping,
-  getMappingOptions,
   reprocessUpload,
   UploadStatus,
   ResultRow,
@@ -36,7 +32,6 @@ import {
   SummaryResponse,
   ValidationError,
   Behaviour,
-  ScenarioMapping,
   IRRBB_LABELS,
   LCR_LABELS,
   NSFR_LABELS,
@@ -198,7 +193,7 @@ function buildColumns(filterType: FilterType): ColDef[] {
     },
     {
       key: "interest_payment_frequency",
-      label: "Interest Pay Freq.",
+      label: "Int. Pay Freq.",
       group: "Input",
       type: "input",
       getValue: (r) =>
@@ -214,21 +209,20 @@ function buildColumns(filterType: FilterType): ColDef[] {
       getValue: (r) => r.day_count,
     },
     {
-      key: "result_type",
-      label: "Result Type",
+      key: "remaining_days",
+      label: "Remaining Days",
       group: "Input",
       type: "input",
-      getValue: (r) => r.result_type || "Normal",
+      getValue: (r) => r.remaining_days,
+    },
+    {
+      key: "result_type",
+      label: "Result Type",
+      group: "Result Type",
+      type: "input",
+      getValue: (r) => r.result_type,
     },
   ];
-
-  const remDays: ColDef = {
-    key: "remaining_days",
-    label: "Rem. Days",
-    group: "RemDays",
-    type: "result",
-    getValue: (r) => r.remaining_days,
-  };
 
   const lcrCols: ColDef[] = LCR_LABELS.map((label) => ({
     key: `lcr__${label}`,
@@ -254,7 +248,7 @@ function buildColumns(filterType: FilterType): ColDef[] {
     getValue: (r: ResultRow) => getBucketValue(r, "irrbb", label, filterType),
   }));
 
-  return [...inputCols, remDays, ...lcrCols, ...nsfrCols, ...irrbbCols];
+  return [...inputCols, ...lcrCols, ...nsfrCols, ...irrbbCols];
 }
 
 const INPUT_KEYS = [
@@ -275,6 +269,7 @@ const INPUT_KEYS = [
   "method",
   "interest_payment_frequency",
   "day_count",
+  "remaining_days",
   "result_type",
 ];
 
@@ -292,14 +287,18 @@ const PIVOTABLE_KEYS = [
   "method",
   "result_type",
 ];
-
 function getColumnGroups(allColumns: ColDef[]) {
   return [
     {
       name: "Input",
       columns: allColumns.filter((c) => c.group === "Input").map((c) => c.key),
     },
-    { name: "RemDays", columns: ["remaining_days"] },
+    {
+      name: "Result Type",
+      columns: allColumns
+        .filter((c) => c.group === "Result Type")
+        .map((c) => c.key),
+    },
     {
       name: "CF LCR",
       columns: allColumns.filter((c) => c.group === "CF LCR").map((c) => c.key),
@@ -923,775 +922,236 @@ function PivotTableView({
 }
 
 /* ============================================================ */
-/*  SCENARIO PANEL                                              */
+/*  SCENARIOS SECTION                                           */
 /* ============================================================ */
-function ScenarioPanel({
+function ScenariosSection({
   uploadId,
-  onReprocessed,
+  onUpdate,
 }: {
   uploadId: string;
-  onReprocessed: () => void;
+  onUpdate: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const [behaviours, setBehaviours] = useState<Behaviour[]>([]);
-  const [mappings, setMappings] = useState<ScenarioMapping[]>([]);
-  const [mappingOptions, setMappingOptions] = useState<{
-    product_types: string[];
-    ccys: string[];
-    segments: string[];
-    transactionals: string[];
-  }>({ product_types: [], ccys: [], segments: [], transactionals: [] });
+  const [isAdding, setIsAdding] = useState(false);
+  const [newScenarioName, setNewScenarioName] = useState("");
+  const [newScenarioFile, setNewScenarioFile] = useState<File | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Behaviour upload form
-  const [behaviourName, setBehaviourName] = useState("");
-  const [behaviourFile, setBehaviourFile] = useState<File | null>(null);
-  const behaviourFileRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadMsg, setUploadMsg] = useState("");
-
-  // Mapping form
-  const [newMapping, setNewMapping] = useState({
-    product_type: "",
-    ccy: "",
-    segment: "",
-    transactional: "",
-    behaviour_id: 0,
-  });
-
-  // Edit behaviour state
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editName, setEditName] = useState("");
-  const [editFile, setEditFile] = useState<File | null>(null);
-  const editFileRef = useRef<HTMLInputElement>(null);
-  const [editSaving, setEditSaving] = useState(false);
-
-  // Reprocess state
-  const [reprocessing, setReprocessing] = useState(false);
-
-  const loadData = useCallback(async () => {
+  const load = useCallback(async () => {
     try {
-      const [b, m, o] = await Promise.all([
-        listBehaviours(uploadId),
-        listMappings(uploadId),
-        getMappingOptions(uploadId),
-      ]);
-      setBehaviours(b);
-      setMappings(m);
-      setMappingOptions(o);
-    } catch {
-      // ignore
+      const list = await listBehaviours(uploadId);
+      setBehaviours(list.filter((b) => !b.is_default));
+    } catch (err) {
+      console.error(err);
     }
   }, [uploadId]);
 
   useEffect(() => {
-    if (expanded) loadData();
-  }, [expanded, loadData]);
+    load();
+  }, [load]);
 
-  const handleUploadBehaviour = async () => {
-    if (!behaviourFile || !behaviourName.trim()) return;
-    setUploading(true);
-    setUploadMsg("");
-    try {
-      const result = await uploadBehaviour(
-        uploadId,
-        behaviourFile,
-        behaviourName.trim(),
-      );
-      setUploadMsg(
-        `✅ "${behaviourName}" saved with ${result.buckets} buckets`,
-      );
-      setBehaviourName("");
-      setBehaviourFile(null);
-      if (behaviourFileRef.current) behaviourFileRef.current.value = "";
-      loadData();
-    } catch (e: any) {
-      setUploadMsg(`❌ ${e.message}`);
+  const handleAdd = async () => {
+    if (!newScenarioName || !newScenarioFile) {
+      setError("Name and file are required");
+      return;
     }
-    setUploading(false);
+    setLoading(true);
+    setError(null);
+    try {
+      await uploadBehaviour(uploadId, newScenarioFile, newScenarioName);
+      await reprocessUpload(uploadId);
+      setNewScenarioName("");
+      setNewScenarioFile(null);
+      setIsAdding(false);
+      load();
+      onUpdate();
+    } catch (err: any) {
+      setError(err.message || "Failed to add scenario");
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleDeleteBehaviour = async (id: number) => {
-    if (
-      !confirm("Delete this behaviour? Mappings using it will also be removed.")
-    )
-      return;
+  const handleDelete = async (id: number) => {
+    if (!confirm("Delete this scenario?")) return;
     try {
       await deleteBehaviour(id);
-      loadData();
-    } catch (e: any) {
-      setUploadMsg(`❌ ${e.message}`);
-    }
-  };
-
-  const handleStartEdit = (b: Behaviour) => {
-    setEditingId(b.id);
-    setEditName(b.name);
-    setEditFile(null);
-    if (editFileRef.current) editFileRef.current.value = "";
-  };
-
-  const handleSaveEdit = async () => {
-    if (editingId === null) return;
-    setEditSaving(true);
-    try {
-      await updateBehaviour(
-        editingId,
-        editName || undefined,
-        editFile || undefined,
-      );
-      setUploadMsg(`✅ Behaviour updated`);
-      setEditingId(null);
-      loadData();
-    } catch (e: any) {
-      setUploadMsg(`❌ ${e.message}`);
-    }
-    setEditSaving(false);
-  };
-
-  const handleAddMapping = async () => {
-    if (!newMapping.behaviour_id) return;
-    try {
-      await createMapping(uploadId, newMapping);
-      setNewMapping({
-        product_type: "",
-        ccy: "",
-        segment: "",
-        transactional: "",
-        behaviour_id: 0,
-      });
-      loadData();
-    } catch (e: any) {
-      setUploadMsg(`❌ ${e.message}`);
-    }
-  };
-
-  const handleDeleteMapping = async (id: number) => {
-    try {
-      await deleteMapping(id);
-      loadData();
-    } catch {
-      // ignore
-    }
-  };
-
-  const handleReprocess = async () => {
-    setReprocessing(true);
-    try {
       await reprocessUpload(uploadId);
-      // Wait for processing to complete
-      await waitForProcessing(uploadId);
-      onReprocessed();
-    } catch (e: any) {
-      setUploadMsg(`❌ Reprocess failed: ${e.message}`);
+      load();
+      onUpdate();
+    } catch (err) {
+      alert("Failed to delete scenario");
     }
-    setReprocessing(false);
-  };
-
-  const customBehaviours = behaviours.filter((b) => !b.is_default);
-  const panelStyle: React.CSSProperties = {
-    background: "rgba(255,255,255,0.03)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    borderRadius: 12,
-    marginBottom: 16,
-    overflow: "hidden",
-  };
-  const headStyle: React.CSSProperties = {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: "12px 16px",
-    cursor: "pointer",
-    userSelect: "none",
-  };
-  const secStyle: React.CSSProperties = {
-    padding: "16px",
-    borderTop: "1px solid rgba(255,255,255,0.06)",
-  };
-  const inputStyle: React.CSSProperties = {
-    padding: "6px 10px",
-    background: "rgba(255,255,255,0.06)",
-    border: "1px solid rgba(255,255,255,0.12)",
-    borderRadius: 6,
-    color: "#e2e8f0",
-    fontSize: 13,
-    outline: "none",
-  };
-  const selectStyle: React.CSSProperties = {
-    ...inputStyle,
-    minWidth: 100,
-    backgroundColor: "#1a1f3a",
-    color: "#e2e8f0",
-  };
-  const btnPrimary: React.CSSProperties = {
-    padding: "6px 14px",
-    background: "linear-gradient(135deg, #667eea, #764ba2)",
-    border: "none",
-    borderRadius: 6,
-    color: "#fff",
-    cursor: "pointer",
-    fontSize: 13,
-    fontWeight: 600,
-  };
-  const btnDanger: React.CSSProperties = {
-    padding: "4px 8px",
-    background: "rgba(239,68,68,0.12)",
-    border: "1px solid rgba(239,68,68,0.3)",
-    borderRadius: 6,
-    color: "#ef4444",
-    cursor: "pointer",
-    fontSize: 12,
-  };
-  const tagStyle: React.CSSProperties = {
-    display: "inline-block",
-    padding: "3px 8px",
-    borderRadius: 4,
-    fontSize: 11,
-    fontWeight: 600,
   };
 
   return (
-    <div style={panelStyle}>
-      <div style={headStyle} onClick={() => setExpanded(!expanded)}>
-        <span style={{ fontSize: 14, fontWeight: 600 }}>
-          🎯 Scenario & Behaviour Engine
-          {customBehaviours.length > 0 && (
-            <span
-              style={{
-                ...tagStyle,
-                background: "rgba(102,126,234,0.15)",
-                color: "#667eea",
-                marginLeft: 8,
-              }}
-            >
-              {customBehaviours.length} custom
-            </span>
-          )}
-          {mappings.length > 0 && (
-            <span
-              style={{
-                ...tagStyle,
-                background: "rgba(34,197,94,0.15)",
-                color: "#22c55e",
-                marginLeft: 4,
-              }}
-            >
-              {mappings.length} mapping{mappings.length !== 1 ? "s" : ""}
-            </span>
-          )}
-        </span>
-        <span style={{ fontSize: 12, color: "#64748b" }}>
-          {expanded ? "▲ Collapse" : "▼ Expand"}
-        </span>
+    <div
+      className="scenarios-section fade-in"
+      style={{
+        background: "rgba(255,255,255,0.03)",
+        border: "1px solid rgba(255,255,255,0.08)",
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 16,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 12,
+        }}
+      >
+        <h3
+          style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "#94a3b8" }}
+        >
+          Scenarios
+        </h3>
+        <button
+          onClick={() => setIsAdding(!isAdding)}
+          style={{
+            background: isAdding
+              ? "rgba(239,68,68,0.1)"
+              : "rgba(102,126,234,0.1)",
+            color: isAdding ? "#ef4444" : "#667eea",
+            border: `1px solid ${isAdding ? "rgba(239,68,68,0.2)" : "rgba(102,126,234,0.2)"}`,
+            borderRadius: "50%",
+            width: 24,
+            height: 24,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 14,
+            fontWeight: "bold",
+          }}
+        >
+          {isAdding ? "✕" : "+"}
+        </button>
       </div>
 
-      {expanded && (
-        <div>
-          {/* Upload Behaviour CSV */}
-          <div style={secStyle}>
-            <div
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {behaviours.map((b) => (
+          <div
+            key={b.id}
+            style={{
+              background: "rgba(102,126,234,0.1)",
+              padding: "4px 10px",
+              borderRadius: 20,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              border: "1px solid rgba(102,126,234,0.2)",
+            }}
+          >
+            <span style={{ fontSize: 12, color: "#e2e8f0" }}>{b.name}</span>
+            <button
+              onClick={() => handleDelete(b.id)}
               style={{
-                fontSize: 13,
-                fontWeight: 600,
-                marginBottom: 8,
+                background: "transparent",
+                border: "none",
                 color: "#94a3b8",
+                cursor: "pointer",
+                padding: 0,
+                fontSize: 10,
+                marginTop: 1,
               }}
             >
-              📂 Upload Custom Behaviour CSV
+              ✕
+            </button>
+          </div>
+        ))}
+        {behaviours.length === 0 && !isAdding && (
+          <div style={{ color: "#64748b", fontSize: 12, fontStyle: "italic" }}>
+            No scenarios added
+          </div>
+        )}
+      </div>
+
+      {isAdding && (
+        <div
+          className="fade-in"
+          style={{
+            marginTop: 16,
+            borderTop: "1px solid rgba(255,255,255,0.06)",
+            paddingTop: 16,
+          }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <input
+              type="text"
+              placeholder="Scenario Name (e.g. COVID-19)"
+              value={newScenarioName}
+              onChange={(e) => setNewScenarioName(e.target.value)}
+              style={{
+                padding: "8px 12px",
+                background: "rgba(255,255,255,0.05)",
+                border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: 8,
+                color: "#fff",
+                fontSize: 13,
+                outline: "none",
+              }}
+            />
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <input
+                type="file"
+                accept=".csv"
+                onChange={(e) =>
+                  setNewScenarioFile(e.target.files?.[0] || null)
+                }
+                style={{ fontSize: 12, color: "#94a3b8" }}
+              />
+              <span style={{ fontSize: 11, color: "#64748b" }}>
+                2-section CSV
+              </span>
             </div>
+            {error && (
+              <div style={{ color: "#ef4444", fontSize: 12 }}>{error}</div>
+            )}
             <div
               style={{
                 display: "flex",
                 gap: 8,
-                alignItems: "center",
-                flexWrap: "wrap",
-              }}
-            >
-              <input
-                type="text"
-                placeholder="Behaviour name (e.g. Covid Scenario)"
-                value={behaviourName}
-                onChange={(e) => setBehaviourName(e.target.value)}
-                style={{ ...inputStyle, flex: "1 1 200px", minWidth: 180 }}
-              />
-              <input
-                ref={behaviourFileRef}
-                type="file"
-                accept=".csv,.txt"
-                onChange={(e) => setBehaviourFile(e.target.files?.[0] || null)}
-                style={{ fontSize: 12, color: "#a0aec0" }}
-              />
-              <button
-                onClick={handleUploadBehaviour}
-                disabled={!behaviourFile || !behaviourName.trim() || uploading}
-                style={{
-                  ...btnPrimary,
-                  opacity:
-                    !behaviourFile || !behaviourName.trim() || uploading
-                      ? 0.5
-                      : 1,
-                }}
-              >
-                {uploading ? "⏳ Uploading..." : "⬆ Upload"}
-              </button>
-            </div>
-            {uploadMsg && (
-              <div
-                style={{
-                  marginTop: 6,
-                  fontSize: 12,
-                  color: uploadMsg.startsWith("✅") ? "#22c55e" : "#f87171",
-                }}
-              >
-                {uploadMsg}
-              </div>
-            )}
-            <div style={{ fontSize: 11, color: "#64748b", marginTop: 6 }}>
-              CSV format:{" "}
-              <code style={{ color: "#a0aec0" }}>
-                Bucket Type, Bucket Name, Percentage
-              </code>
-            </div>
-          </div>
-
-          {/* Saved Behaviours */}
-          <div style={secStyle}>
-            <div
-              style={{
-                fontSize: 13,
-                fontWeight: 600,
-                marginBottom: 8,
-                color: "#94a3b8",
-              }}
-            >
-              📋 Saved Behaviours
-            </div>
-            {behaviours.length === 0 ? (
-              <div style={{ color: "#64748b", fontSize: 13 }}>
-                No behaviours loaded yet
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {behaviours.map((b) => (
-                  <div
-                    key={b.id}
-                    style={{
-                      background: "rgba(255,255,255,0.02)",
-                      borderRadius: 6,
-                      padding: "6px 10px",
-                    }}
-                  >
-                    {editingId === b.id ? (
-                      /* EDIT MODE */
-                      <div
-                        style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 6,
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: "flex",
-                            gap: 6,
-                            alignItems: "center",
-                            flexWrap: "wrap",
-                          }}
-                        >
-                          <input
-                            type="text"
-                            value={editName}
-                            onChange={(e) => setEditName(e.target.value)}
-                            style={{
-                              ...inputStyle,
-                              flex: "1 1 160px",
-                              minWidth: 140,
-                            }}
-                            placeholder="Behaviour name"
-                          />
-                          <input
-                            ref={editFileRef}
-                            type="file"
-                            accept=".csv,.txt"
-                            onChange={(e) =>
-                              setEditFile(e.target.files?.[0] || null)
-                            }
-                            style={{
-                              fontSize: 12,
-                              color: "#a0aec0",
-                              flex: "0 0 auto",
-                            }}
-                          />
-                        </div>
-                        <div
-                          style={{
-                            display: "flex",
-                            gap: 6,
-                            justifyContent: "flex-end",
-                          }}
-                        >
-                          <button
-                            onClick={() => setEditingId(null)}
-                            style={{
-                              padding: "4px 10px",
-                              background: "rgba(255,255,255,0.06)",
-                              border: "1px solid rgba(255,255,255,0.12)",
-                              borderRadius: 6,
-                              color: "#a0aec0",
-                              cursor: "pointer",
-                              fontSize: 12,
-                            }}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            onClick={handleSaveEdit}
-                            disabled={editSaving}
-                            style={{
-                              ...btnPrimary,
-                              padding: "4px 10px",
-                              fontSize: 12,
-                              opacity: editSaving ? 0.5 : 1,
-                            }}
-                          >
-                            {editSaving ? "Saving..." : "💾 Save"}
-                          </button>
-                        </div>
-                        {editFile && (
-                          <div style={{ fontSize: 11, color: "#667eea" }}>
-                            New file: {editFile.name} (will replace current
-                            weights)
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      /* VIEW MODE */
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                          }}
-                        >
-                          <span style={{ fontSize: 13 }}>{b.name}</span>
-                          {b.is_default && (
-                            <span
-                              style={{
-                                ...tagStyle,
-                                background: "rgba(250,204,21,0.15)",
-                                color: "#facc15",
-                              }}
-                            >
-                              Default
-                            </span>
-                          )}
-                        </div>
-                        {!b.is_default && (
-                          <div style={{ display: "flex", gap: 4 }}>
-                            <button
-                              onClick={() => handleStartEdit(b)}
-                              style={{
-                                padding: "4px 8px",
-                                background: "rgba(102,126,234,0.12)",
-                                border: "1px solid rgba(102,126,234,0.3)",
-                                borderRadius: 6,
-                                color: "#667eea",
-                                cursor: "pointer",
-                                fontSize: 12,
-                              }}
-                            >
-                              ✎ Edit
-                            </button>
-                            <button
-                              onClick={() => handleDeleteBehaviour(b.id)}
-                              style={btnDanger}
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Scenario Mappings */}
-          <div style={secStyle}>
-            <div
-              style={{
-                fontSize: 13,
-                fontWeight: 600,
-                marginBottom: 8,
-                color: "#94a3b8",
-              }}
-            >
-              🔗 Scenario Mappings
-            </div>
-            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
-              Map loan criteria (ProductType + CCY + Segment + Transactional) →
-              Custom Behaviour
-            </div>
-
-            {/* Existing mappings */}
-            {mappings.length > 0 && (
-              <div style={{ marginBottom: 10 }}>
-                <table
-                  style={{
-                    width: "100%",
-                    borderCollapse: "collapse",
-                    fontSize: 12,
-                  }}
-                >
-                  <thead>
-                    <tr>
-                      <th
-                        style={{
-                          padding: "4px 8px",
-                          textAlign: "left",
-                          color: "#64748b",
-                          borderBottom: "1px solid rgba(255,255,255,0.06)",
-                        }}
-                      >
-                        Product Type
-                      </th>
-                      <th
-                        style={{
-                          padding: "4px 8px",
-                          textAlign: "left",
-                          color: "#64748b",
-                          borderBottom: "1px solid rgba(255,255,255,0.06)",
-                        }}
-                      >
-                        CCY
-                      </th>
-                      <th
-                        style={{
-                          padding: "4px 8px",
-                          textAlign: "left",
-                          color: "#64748b",
-                          borderBottom: "1px solid rgba(255,255,255,0.06)",
-                        }}
-                      >
-                        Segment
-                      </th>
-                      <th
-                        style={{
-                          padding: "4px 8px",
-                          textAlign: "left",
-                          color: "#64748b",
-                          borderBottom: "1px solid rgba(255,255,255,0.06)",
-                        }}
-                      >
-                        Transactional
-                      </th>
-                      <th
-                        style={{
-                          padding: "4px 8px",
-                          textAlign: "left",
-                          color: "#64748b",
-                          borderBottom: "1px solid rgba(255,255,255,0.06)",
-                        }}
-                      >
-                        → Behaviour
-                      </th>
-                      <th
-                        style={{
-                          padding: "4px 8px",
-                          textAlign: "right",
-                          borderBottom: "1px solid rgba(255,255,255,0.06)",
-                        }}
-                      ></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {mappings.map((m) => (
-                      <tr key={m.id}>
-                        <td style={{ padding: "4px 8px", color: "#e2e8f0" }}>
-                          {m.product_type}
-                        </td>
-                        <td style={{ padding: "4px 8px", color: "#e2e8f0" }}>
-                          {m.ccy}
-                        </td>
-                        <td style={{ padding: "4px 8px", color: "#e2e8f0" }}>
-                          {m.segment}
-                        </td>
-                        <td style={{ padding: "4px 8px", color: "#e2e8f0" }}>
-                          {m.transactional}
-                        </td>
-                        <td
-                          style={{
-                            padding: "4px 8px",
-                            color: "#667eea",
-                            fontWeight: 600,
-                          }}
-                        >
-                          {m.behaviour_name}
-                        </td>
-                        <td style={{ padding: "4px 8px", textAlign: "right" }}>
-                          <button
-                            onClick={() => handleDeleteMapping(m.id)}
-                            style={btnDanger}
-                          >
-                            ✕
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {/* Add mapping form */}
-            {customBehaviours.length > 0 && (
-              <div
-                style={{
-                  display: "flex",
-                  gap: 6,
-                  alignItems: "center",
-                  flexWrap: "wrap",
-                }}
-              >
-                <select
-                  value={newMapping.product_type}
-                  onChange={(e) =>
-                    setNewMapping((p) => ({
-                      ...p,
-                      product_type: e.target.value,
-                    }))
-                  }
-                  style={selectStyle}
-                >
-                  <option value="">ProductType</option>
-                  {mappingOptions.product_types.map((v) => (
-                    <option key={v} value={v}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={newMapping.ccy}
-                  onChange={(e) =>
-                    setNewMapping((p) => ({ ...p, ccy: e.target.value }))
-                  }
-                  style={selectStyle}
-                >
-                  <option value="">CCY</option>
-                  {mappingOptions.ccys.map((v) => (
-                    <option key={v} value={v}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={newMapping.segment}
-                  onChange={(e) =>
-                    setNewMapping((p) => ({ ...p, segment: e.target.value }))
-                  }
-                  style={selectStyle}
-                >
-                  <option value="">Segment</option>
-                  {mappingOptions.segments.map((v) => (
-                    <option key={v} value={v}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={newMapping.transactional}
-                  onChange={(e) =>
-                    setNewMapping((p) => ({
-                      ...p,
-                      transactional: e.target.value,
-                    }))
-                  }
-                  style={selectStyle}
-                >
-                  <option value="">Transactional</option>
-                  {mappingOptions.transactionals.map((v) => (
-                    <option key={v} value={v}>
-                      {v}
-                    </option>
-                  ))}
-                </select>
-                <span style={{ color: "#64748b", fontSize: 12 }}>→</span>
-                <select
-                  value={newMapping.behaviour_id}
-                  onChange={(e) =>
-                    setNewMapping((p) => ({
-                      ...p,
-                      behaviour_id: parseInt(e.target.value) || 0,
-                    }))
-                  }
-                  style={{ ...selectStyle, minWidth: 140 }}
-                >
-                  <option value={0}>Select Behaviour</option>
-                  {customBehaviours.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={handleAddMapping}
-                  disabled={!newMapping.behaviour_id}
-                  style={{
-                    ...btnPrimary,
-                    opacity: !newMapping.behaviour_id ? 0.5 : 1,
-                  }}
-                >
-                  + Add
-                </button>
-              </div>
-            )}
-            {customBehaviours.length === 0 && (
-              <div
-                style={{ color: "#64748b", fontSize: 12, fontStyle: "italic" }}
-              >
-                Upload a custom behaviour first to create mappings
-              </div>
-            )}
-          </div>
-
-          {/* Reprocess */}
-          {(customBehaviours.length > 0 || mappings.length > 0) && (
-            <div
-              style={{
-                ...secStyle,
-                display: "flex",
                 justifyContent: "flex-end",
-                alignItems: "center",
-                gap: 10,
+                marginTop: 4,
               }}
             >
-              <span style={{ color: "#64748b", fontSize: 12 }}>
-                After adding behaviours/mappings, reprocess to generate new
-                results
-              </span>
               <button
-                onClick={handleReprocess}
-                disabled={reprocessing}
+                onClick={() => setIsAdding(false)}
                 style={{
-                  ...btnPrimary,
-                  padding: "8px 18px",
-                  background: reprocessing
-                    ? "#444"
-                    : "linear-gradient(135deg, #22c55e, #15803d)",
+                  padding: "6px 14px",
+                  background: "transparent",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: 8,
+                  color: "#94a3b8",
+                  cursor: "pointer",
+                  fontSize: 13,
                 }}
               >
-                {reprocessing ? "⏳ Reprocessing..." : "🔄 Reprocess"}
+                Cancel
+              </button>
+              <button
+                onClick={handleAdd}
+                disabled={loading}
+                style={{
+                  padding: "6px 14px",
+                  background: "linear-gradient(135deg, #667eea, #764ba2)",
+                  border: "none",
+                  borderRadius: 8,
+                  color: "#fff",
+                  cursor: "pointer",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  opacity: loading ? 0.6 : 1,
+                }}
+              >
+                {loading ? "Adding..." : "Add Scenario"}
               </button>
             </div>
-          )}
+          </div>
         </div>
       )}
     </div>
@@ -2279,28 +1739,27 @@ export default function Home() {
           </div>
         )}
 
-        {/* SCENARIO PANEL */}
+        {/* SCENARIOS SECTION */}
         {processed && uploadId && (
-          <ScenarioPanel
+          <ScenariosSection
             uploadId={uploadId}
-            onReprocessed={() => {
-              // Reload results after reprocess
+            onUpdate={() => {
+              // Reload results
               getResults(uploadId, {
                 page: 1,
                 limit: 20,
-                filter_type: filterType,
+                result_type:
+                  resultTypeFilter === "all" ? undefined : resultTypeFilter,
               }).then((pageData) => {
                 setResults(pageData.data || []);
                 setTotalRows(pageData.total);
                 setCurrentPage(1);
                 setTotalPages(pageData.total_pages);
-                // Clear distinct values cache so it reloads
                 setDistinctValues({});
               });
               getSummary(uploadId, filterType)
                 .then(setSummary)
                 .catch(() => {});
-              // Reload result types
               getFilterOptions(uploadId, "result_type")
                 .then(setAvailableResultTypes)
                 .catch(() => {});
