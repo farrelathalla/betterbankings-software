@@ -1007,7 +1007,7 @@ export default function Home() {
     if (!uploadId) return;
     try {
       const list = await listBehaviours(uploadId);
-      setScenarios(list);
+      setScenarios(list.filter((b) => !b.is_default));
     } catch {
       // ignore
     }
