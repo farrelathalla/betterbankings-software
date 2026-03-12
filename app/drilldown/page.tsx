@@ -16,6 +16,12 @@ import {
   IRRBB_LABELS,
   LCR_LABELS,
   NSFR_LABELS,
+  Behaviour,
+  listBehaviours,
+  uploadBehaviour,
+  updateBehaviour,
+  deleteBehaviour,
+  reprocessUpload,
 } from "../lib/api";
 
 /* ============================================================ */
@@ -46,7 +52,7 @@ function getBucketValue(
   row: ResultRow,
   bucketType: "irrbb" | "lcr" | "nsfr",
   label: string,
-  filterType: FilterType
+  filterType: FilterType,
 ): number {
   const pKey = `${bucketType}_principal` as keyof ResultRow;
   const iKey = `${bucketType}_interest` as keyof ResultRow;
@@ -229,7 +235,7 @@ function getDefaultFilterState(): ColumnFilterState {
 
 function isFilterActive(
   fs: ColumnFilterState | undefined,
-  allValues: string[]
+  allValues: string[],
 ): boolean {
   if (!fs) return false;
   if (fs.sortDirection !== null) return true;
@@ -264,7 +270,7 @@ function FilterDropdown({
     selectedValues: new Set(
       filterState.selectedValues.size > 0
         ? filterState.selectedValues
-        : allValues
+        : allValues,
     ),
   }));
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -283,10 +289,10 @@ function FilterDropdown({
   }, [onClose]);
 
   const filteredValues = allValues.filter((v) =>
-    v.toLowerCase().includes(localState.searchText.toLowerCase())
+    v.toLowerCase().includes(localState.searchText.toLowerCase()),
   );
   const allSelected = filteredValues.every((v) =>
-    localState.selectedValues.has(v)
+    localState.selectedValues.has(v),
   );
 
   const toggleSelectAll = () => {
@@ -533,40 +539,56 @@ function DrilldownContent() {
     Record<string, ColumnFilterState>
   >({});
 
-  // Load data from API
+  const [scenarios, setScenarios] = useState<Behaviour[]>([]);
+  const [activeBehaviourId, setActiveBehaviourId] = useState<number | null>(
+    null,
+  );
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Fetch Scenarios
+  const fetchScenarios = useCallback(async () => {
+    if (!uploadId) return;
+    try {
+      const list = await listBehaviours(uploadId);
+      setScenarios(list);
+    } catch {
+      // ignore
+    }
+  }, [uploadId]);
+
   useEffect(() => {
+    fetchScenarios();
+  }, [fetchScenarios]);
+
+  // Load data from API
+  const loadData = useCallback(async () => {
     if (!uploadId || !isLoggedIn()) {
       setLoaded(true);
       return;
     }
+    try {
+      const apiFilters: Record<string, string> = { ...filters };
+      const pageData = await getResults(uploadId, {
+        page: 1,
+        limit: 20,
+        filter_type: filterType,
+        filters: apiFilters,
+        behaviour_id: activeBehaviourId,
+      });
 
-    const loadData = async () => {
-      try {
-        // Build server-side filters from the drill-down filters
-        const apiFilters: Record<string, string> = {};
-        for (const [key, val] of Object.entries(filters)) {
-          apiFilters[key] = val;
-        }
+      setData(pageData.data || []);
+      setTotalRows(pageData.total);
+      setCurrentPage(1);
+      setTotalPages(pageData.total_pages);
+    } catch {
+      // ignore
+    }
+    setLoaded(true);
+  }, [uploadId, filterType, filters, activeBehaviourId]);
 
-        const pageData = await getResults(uploadId, {
-          page: 1,
-          limit: 20,
-          filter_type: filterType,
-          filters: apiFilters,
-        });
-
-        setData(pageData.data || []);
-        setTotalRows(pageData.total);
-        setCurrentPage(1);
-        setTotalPages(pageData.total_pages);
-      } catch {
-        // ignore
-      }
-      setLoaded(true);
-    };
-
+  useEffect(() => {
     loadData();
-  }, [uploadId, filterType, filters]);
+  }, [loadData]);
 
   const handleLoadMore = useCallback(async () => {
     if (!uploadId || loadingMore || currentPage >= totalPages) return;
@@ -582,6 +604,7 @@ function DrilldownContent() {
         limit: 20,
         filter_type: filterType,
         filters: apiFilters,
+        behaviour_id: activeBehaviourId,
       });
       setData((prev) => [...prev, ...(pageData.data || [])]);
       setCurrentPage(nextPage);
@@ -608,12 +631,12 @@ function DrilldownContent() {
         return next;
       });
     },
-    []
+    [],
   );
 
   const visibleCols = useMemo(
     () => allColumns.filter((c) => visibleKeys.has(c.key)),
-    [allColumns, visibleKeys]
+    [allColumns, visibleKeys],
   );
 
   // Apply client-side column filters
@@ -626,7 +649,7 @@ function DrilldownContent() {
 
       if (fs.selectedValues.size > 0) {
         result = result.filter((row) =>
-          fs.selectedValues.has(String(col.getValue(row)))
+          fs.selectedValues.has(String(col.getValue(row))),
         );
       }
 
@@ -635,21 +658,21 @@ function DrilldownContent() {
           const min = parseFloat(fs.numberMin);
           if (!isNaN(min))
             result = result.filter(
-              (row) => (col.getValue(row) as number) >= min
+              (row) => (col.getValue(row) as number) >= min,
             );
         }
         if (fs.numberMax !== "") {
           const max = parseFloat(fs.numberMax);
           if (!isNaN(max))
             result = result.filter(
-              (row) => (col.getValue(row) as number) <= max
+              (row) => (col.getValue(row) as number) <= max,
             );
         }
       }
     }
 
     const sortEntries = Object.entries(columnFilters).filter(
-      ([, fs]) => fs.sortDirection !== null
+      ([, fs]) => fs.sortDirection !== null,
     );
     if (sortEntries.length > 0) {
       const [sortKey, sortFs] = sortEntries[sortEntries.length - 1];
@@ -677,12 +700,94 @@ function DrilldownContent() {
     if (!uploadId) return;
     setExporting(true);
     try {
-      await downloadExport(uploadId, filterType, filters);
+      await downloadExport(uploadId, filterType, filters, activeBehaviourId);
     } catch {
       /* ignore */
     }
     setExporting(false);
-  }, [uploadId, filterType, filters]);
+  }, [uploadId, filterType, filters, activeBehaviourId]);
+
+  // Scenario Handlers
+  const handleAddScenario = async () => {
+    const name = prompt("Enter Scenario Name:");
+    if (!name) return;
+
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".csv";
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+
+      try {
+        setRefreshing(true);
+        const res = await uploadBehaviour(uploadId, file, name);
+        await reprocessUpload(uploadId); // Trigger reprocess for all
+        await fetchScenarios();
+        setActiveBehaviourId(res.id);
+        alert("Scenario added and reprocessed.");
+      } catch (err: any) {
+        alert(err.message);
+      } finally {
+        setRefreshing(false);
+      }
+    };
+    input.click();
+  };
+
+  const handleEditScenario = async (id: number) => {
+    const sc = scenarios.find((s) => s.id === id);
+    if (!sc) return;
+    const newName = prompt("Rename Scenario:", sc.name);
+    if (newName === null) return;
+
+    try {
+      setRefreshing(true);
+      await updateBehaviour(id, newName);
+      await fetchScenarios();
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const handleRefreshScenario = async (id: number) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".csv";
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+
+      try {
+        setRefreshing(true);
+        await updateBehaviour(id, undefined, file);
+        await reprocessUpload(uploadId);
+        alert("Scenario file updated and reprocessed.");
+        loadData();
+      } catch (err: any) {
+        alert(err.message);
+      } finally {
+        setRefreshing(false);
+      }
+    };
+    input.click();
+  };
+
+  const handleDeleteScenario = async (id: number) => {
+    if (!confirm("Are you sure you want to delete this scenario?")) return;
+    try {
+      setRefreshing(true);
+      await deleteBehaviour(id);
+      if (activeBehaviourId === id) setActiveBehaviourId(null);
+      await fetchScenarios();
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   return (
     <>
@@ -729,6 +834,65 @@ function DrilldownContent() {
             );
           })}
         </div>
+
+        {/* Tab Bar */}
+        <div className="scenario-tabs-container">
+          <div className="scenario-tabs">
+            <button
+              className={`scenario-tab ${activeBehaviourId === null ? "active" : ""}`}
+              onClick={() => setActiveBehaviourId(null)}
+            >
+              All Results
+            </button>
+            {scenarios.map((sc) => (
+              <button
+                key={sc.id}
+                className={`scenario-tab ${activeBehaviourId === sc.id ? "active" : ""}`}
+                onClick={() => setActiveBehaviourId(sc.id)}
+              >
+                {sc.name}
+              </button>
+            ))}
+            <button
+              className="scenario-tab-add"
+              onClick={handleAddScenario}
+              title="Add Scenario"
+            >
+              +
+            </button>
+          </div>
+
+          {activeBehaviourId !== null && (
+            <div className="scenario-controls">
+              <button
+                className="btn-sc-control"
+                onClick={() => handleEditScenario(activeBehaviourId)}
+              >
+                ✏️ Edit Name
+              </button>
+              <button
+                className="btn-sc-control"
+                onClick={() => handleRefreshScenario(activeBehaviourId)}
+              >
+                🔄 Refresh File
+              </button>
+              <button
+                className="btn-sc-control btn-sc-delete"
+                onClick={() => handleDeleteScenario(activeBehaviourId)}
+              >
+                🗑️ Delete
+              </button>
+            </div>
+          )}
+        </div>
+
+        {refreshing && (
+          <div
+            style={{ padding: "0.5rem", color: "#2563eb", fontWeight: "bold" }}
+          >
+            ⌛ Processing changes...
+          </div>
+        )}
 
         <div className="stats-bar fade-in" style={{ marginBottom: "1.5rem" }}>
           <div className="stat-card">
@@ -792,8 +956,8 @@ function DrilldownContent() {
                               ? col.key === "interest_rate"
                                 ? fmtPct(val)
                                 : col.key === "remaining_days"
-                                ? val
-                                : fmtNum(val)
+                                  ? val
+                                  : fmtNum(val)
                               : val}
                           </td>
                         );

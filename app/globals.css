@@ -43,7 +43,11 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    sans-serif;
   min-height: 100vh;
 }
 
@@ -1806,4 +1810,107 @@ body {
   .login-card {
     padding: 2rem 1.5rem;
   }
+}
+
+/* ======================== */
+/*   SCENARIO TABS          */
+/* ======================== */
+.scenario-tabs-container {
+  margin-bottom: 1.5rem;
+  background: rgba(30, 58, 95, 0.5);
+  border-radius: 12px;
+  padding: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.scenario-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.scenario-tab {
+  padding: 0.6rem 1.25rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: var(--gray-400);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.25s ease;
+}
+
+.scenario-tab:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+.scenario-tab.active {
+  background: var(--orange-500);
+  color: white;
+  border-color: var(--orange-500);
+  box-shadow: 0 4px 12px rgba(249, 115, 22, 0.3);
+}
+
+.scenario-tab-add {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(249, 115, 22, 0.1);
+  border: 1px dashed var(--orange-500);
+  border-radius: 8px;
+  color: var(--orange-400);
+  font-size: 1.25rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.scenario-tab-add:hover {
+  background: var(--orange-500);
+  color: white;
+  border-style: solid;
+}
+
+.scenario-controls {
+  display: flex;
+  gap: 0.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.btn-sc-control {
+  padding: 0.5rem 1rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: var(--gray-300);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.btn-sc-control:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--orange-400);
+  color: white;
+}
+
+.btn-sc-delete {
+  margin-left: auto;
+}
+
+.btn-sc-delete:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: #ef4444;
+  color: #f87171;
 }

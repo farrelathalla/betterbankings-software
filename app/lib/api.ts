@@ -186,6 +186,7 @@ export interface ResultsParams {
   limit?: number;
   filter_type?: string;
   result_type?: string;
+  behaviour_id?: string | number | null;
   filters?: Record<string, string>;
 }
 
@@ -239,6 +240,8 @@ export async function getResults(
   if (params.limit) q.set("limit", String(params.limit));
   if (params.filter_type) q.set("filter_type", params.filter_type);
   if (params.result_type) q.set("result_type", params.result_type);
+  if (params.behaviour_id != null)
+    q.set("behaviour_id", String(params.behaviour_id));
   if (params.filters) q.set("filters", JSON.stringify(params.filters));
 
   const res = await fetch(`${API_BASE}/api/results/${uploadId}?${q}`, {
@@ -261,9 +264,12 @@ export async function getSummary(
   uploadId: string,
   filterType: string = "both",
   filters: Record<string, string> = {},
+  behaviourId?: string | number | null,
 ): Promise<SummaryResponse> {
   const searchParams = new URLSearchParams();
   searchParams.set("filter_type", filterType);
+  if (behaviourId != null)
+    searchParams.set("behaviour_id", String(behaviourId));
   if (Object.keys(filters).length > 0)
     searchParams.set("filters", JSON.stringify(filters));
 
@@ -302,10 +308,13 @@ export async function getPivot(
   pivotKeys: string[],
   filterType: string = "both",
   filters: Record<string, string> = {},
+  behaviourId?: string | number | null,
 ): Promise<PivotGroup[]> {
   const searchParams = new URLSearchParams();
   searchParams.set("pivot_keys", pivotKeys.join(","));
   searchParams.set("filter_type", filterType);
+  if (behaviourId != null)
+    searchParams.set("behaviour_id", String(behaviourId));
   if (Object.keys(filters).length > 0)
     searchParams.set("filters", JSON.stringify(filters));
 
@@ -323,9 +332,12 @@ export function getExportUrl(
   uploadId: string,
   filterType: string = "both",
   filters: Record<string, string> = {},
+  behaviourId?: string | number | null,
 ): string {
   const searchParams = new URLSearchParams();
   searchParams.set("filter_type", filterType);
+  if (behaviourId != null)
+    searchParams.set("behaviour_id", String(behaviourId));
   if (Object.keys(filters).length > 0)
     searchParams.set("filters", JSON.stringify(filters));
 
@@ -339,8 +351,9 @@ export async function downloadExport(
   uploadId: string,
   filterType: string = "both",
   filters: Record<string, string> = {},
+  behaviourId?: string | number | null,
 ) {
-  const url = getExportUrl(uploadId, filterType, filters);
+  const url = getExportUrl(uploadId, filterType, filters, behaviourId);
   // Use fetch with auth header instead of direct link
   const res = await fetch(url, { headers: authHeaders() });
   if (!res.ok) throw new Error("Export failed");

@@ -1,9 +1,9 @@
 Reporting Date,Account ID,CCY,Outstanding,Interest Rate,Start Date,End Date,Installment Frequency,ProductType,Segment,Daerah,KodePos,Insured/Uninsured,Transactional/Non Transactional,Interest Payment Frequency,Method,Day Count,Instrument Type,Margin,Revolving_flag,Asset_Liability,Market Value
-31/01/2025,kredit001,IDR,1000000,12.0,31/01/2024,31/01/2030,1,1,1,Jakarta,xxxx,,False,1,1,1,1.0,,False,Asset,900000
-31/01/2025,kredit002,IDR,1000000,12.0,31/01/2024,31/01/2030,,1,2,Bandung,xxxx,,False,1,2,1,1.0,,True,Asset,900000
-31/01/2025,kredit003,IDR,1000000,12.0,31/01/2024,01/02/2025,,1,2,Bandung,xxxx,,False,1,2,1,1.0,,True,Liability,1000000
-31/01/2025,Deposito001,IDR,500000,6.0,01/01/2025,01/03/2025,,2,1,Jakarta,xxxx,1.0,True,,2,2,1.0,,True,Liability,500000
-31/01/2025,Deposito002,IDR,500000,7.000000000000001,01/01/2025,01/09/2025,,2,2,Bandung,xxxx,1.0,True,,2,2,1.0,,True,Liability,500000
-31/01/2025,Saving001,IDR,10000000,2.0,01/01/2025,,,3,1,Bandung,xxxx,1.0,True,,,,2.0,0.1,True,Liability,10000000
-31/01/2025,kredit004,IDR,1000000,12.0,01/01/2025,31/01/2026,1,1,1,Bandung,xxxx,1.0,True,1,1,1,2.0,0.1,True,Liability,1000000
-31/01/2025,kredit010,USD,500,5.0,01/01/2005,,1,1,1,Bandung,xxxx,1.0,True,,,,,,True,Liability,500
+31/01/2025,kredit_amortization,IDR,1000000,12.0,31/01/2024,31/01/2030,1,1,1,Jakarta,xxxx,,False,1,1,1,1.0,,False,Asset,1200000
+31/01/2025,kredit_behavioural,IDR,5000000,10.0,31/01/2024,,1,1,1,Bandung,xxxx,,False,1,2,1,1.0,,True,Asset,4800000
+31/01/2025,liab_amortization,IDR,1000000,12.0,31/01/2024,01/02/2025,,1,2,Bandung,xxxx,,False,1,2,1,1.0,,True,Liability,1000000
+31/01/2025,liab_behavioural,IDR,20000000,2.0,01/01/2025,,,3,1,Bandung,xxxx,1.0,True,,,,2.0,0.1,True,Liability,20000000
+31/01/2025,saving_account,IDR,50000000,3.5,01/01/2025,,,3,2,Jakarta,xxxx,1.0,True,,2,2,1.0,,True,Liability,50000000
+31/01/2025,long_loan,USD,10000,5.0,01/01/2020,01/01/2040,1,1,1,Bandung,xxxx,1.0,True,1,1,1,2.0,0.1,True,Asset,11000
+31/01/2025,revolving_credit,IDR,2500000,15.0,01/01/2025,,,1,1,Jakarta,xxxx,1.0,True,1,1,1,1.0,,True,Asset,2500000
+31/01/2025,deposito_short,IDR,10000000,6.5,01/01/2025,01/04/2025,,2,1,Jakarta,xxxx,1.0,True,,2,2,1.0,,False,Liability,10000000
