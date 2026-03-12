@@ -241,7 +241,7 @@ export async function getResults(
   if (params.result_type) q.set("result_type", params.result_type);
   if (params.filters) q.set("filters", JSON.stringify(params.filters));
 
-  const res = await fetch(`${API_BASE}/api/uploads/${uploadId}/results?${q}`, {
+  const res = await fetch(`${API_BASE}/api/results/${uploadId}?${q}`, {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to get results");
