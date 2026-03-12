@@ -186,7 +186,7 @@ export interface ResultsParams {
   limit?: number;
   filter_type?: string;
   result_type?: string;
-  filters?: string; // JSON string of Record<string, string[]>
+  filters?: Record<string, string>;
 }
 
 export interface ResultRow {
@@ -239,7 +239,7 @@ export async function getResults(
   if (params.limit) q.set("limit", String(params.limit));
   if (params.filter_type) q.set("filter_type", params.filter_type);
   if (params.result_type) q.set("result_type", params.result_type);
-  if (params.filters) q.set("filters", params.filters);
+  if (params.filters) q.set("filters", JSON.stringify(params.filters));
 
   const res = await fetch(`${API_BASE}/api/uploads/${uploadId}/results?${q}`, {
     headers: authHeaders(),
