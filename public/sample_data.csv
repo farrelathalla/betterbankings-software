@@ -1,18 +1,9 @@
-Reporting Date,Account ID,CCY,Outstanding,Interest Rate,Start Date,End Date,Installment Frequency,ProductType,Segment,Daerah,KodePos,Insured/Uninsured,Transactional/Non Transactional,Method,Interest Payment Frequency,Day Count
-31/01/2025,ACC001,IDR,1000000000,9.00,15/01/2024,15/01/2026,1,1,1,Jakarta,10110,Insured,FALSE,1,1,1
-31/01/2025,ACC002,IDR,500000000,10.50,01/06/2024,01/03/2025,,2,2,Bandung,40123,Uninsured,TRUE,2,,1
-31/01/2025,ACC003,USD,800000,8.25,01/01/2023,01/07/2028,1,1,1,Surabaya,60234,Insured,FALSE,1,1,3
-31/01/2025,ACC004,IDR,250000000,7.50,10/10/2024,10/02/2025,,3,1,Medan,20345,Insured,TRUE,2,,1
-31/01/2025,ACC005,IDR,2000000000,11.00,01/03/2022,01/03/2032,1,1,2,Jakarta Selatan,10220,Uninsured,FALSE,1,1,1
-31/01/2025,ACC006,IDR,750000000,9.75,15/07/2023,15/07/2027,1,1,1,Tangerang Selatan,15414,Insured,FALSE,2,1,1
-31/01/2025,ACC007,IDR,300000000,8.00,01/04/2024,01/10/2025,1,1,1,Jawa Barat,40256,Insured,TRUE,1,1,1
-31/01/2025,ACC008,USD,1200000,7.25,01/09/2022,01/09/2030,1,1,2,Jakarta Pusat,10310,Uninsured,FALSE,2,1,1
-31/01/2025,ACC009,IDR,150000000,12.00,20/11/2024,20/05/2025,,2,1,Semarang,50134,Insured,TRUE,1,,1
-31/01/2025,ACC010,IDR,4500000000,10.25,01/06/2021,01/06/2036,1,1,2,Kalimantan Timur,75123,Uninsured,FALSE,1,1,1
-31/01/2025,ACC011,IDR,85000000,13.50,01/12/2024,01/12/2026,1,1,1,Sulawesi Selatan,90222,Insured,TRUE,2,1,1
-31/01/2025,ACC012,IDR,620000000,9.00,15/03/2023,15/03/2028,1,1,1,Jawa Tengah,50267,Insured,FALSE,1,1,1
-31/01/2025,ACC013,IDR,1800000000,8.50,01/01/2024,01/01/2029,1,1,2,Jakarta Barat,11520,Uninsured,TRUE,2,1,1
-31/01/2025,ACC014,IDR,95000000,14.00,05/08/2024,05/08/2027,1,1,1,Nusa Tenggara Barat,83115,Insured,FALSE,1,1,1
-31/01/2025,ACC015,IDR,200000000,6.50,01/02/2025,01/04/2025,,2,2,Denpasar,80235,Uninsured,TRUE,2,,1
-31/01/2025,ACC016,IDR,350000000,8.75,01/01/2025,,1,4,1,Yogyakarta,55123,Insured,FALSE,1,1,1
-31/01/2025,ACC017,IDR,180000000,9.50,15/06/2024,,1,3,2,Makassar,90134,Uninsured,TRUE,1,1,1
+Reporting Date,Account ID,CCY,Outstanding,Interest Rate,Start Date,End Date,Installment Frequency,ProductType,Segment,Daerah,KodePos,Insured/Uninsured,Transactional/Non Transactional,Interest Payment Frequency,Method,Day Count,Instrument Type,Margin,Revolving_flag,Asset_Liability,Market Value
+31/01/2025,kredit001,IDR,1000000,12.0,31/01/2024,31/01/2030,1,1,1,Jakarta,xxxx,,False,1,1,1,1.0,,False,Asset,900000
+31/01/2025,kredit002,IDR,1000000,12.0,31/01/2024,31/01/2030,,1,2,Bandung,xxxx,,False,1,2,1,1.0,,True,Asset,900000
+31/01/2025,kredit003,IDR,1000000,12.0,31/01/2024,01/02/2025,,1,2,Bandung,xxxx,,False,1,2,1,1.0,,True,Liability,1000000
+31/01/2025,Deposito001,IDR,500000,6.0,01/01/2025,01/03/2025,,2,1,Jakarta,xxxx,1.0,True,,2,2,1.0,,True,Liability,500000
+31/01/2025,Deposito002,IDR,500000,7.000000000000001,01/01/2025,01/09/2025,,2,2,Bandung,xxxx,1.0,True,,2,2,1.0,,True,Liability,500000
+31/01/2025,Saving001,IDR,10000000,2.0,01/01/2025,,,3,1,Bandung,xxxx,1.0,True,,,,2.0,0.1,True,Liability,10000000
+31/01/2025,kredit004,IDR,1000000,12.0,01/01/2025,31/01/2026,1,1,1,Bandung,xxxx,1.0,True,1,1,1,2.0,0.1,True,Liability,1000000
+31/01/2025,kredit010,USD,500,5.0,01/01/2005,,1,1,1,Bandung,xxxx,1.0,True,,,,,,True,Liability,500
