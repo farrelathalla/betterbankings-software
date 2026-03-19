@@ -21,6 +21,8 @@ const TABLES = [
   { key: "day_counts", label: "Day Counts" },
   { key: "currencies", label: "Currencies" },
   { key: "instrument_types", label: "Instrument Types" },
+  { key: "transactional_types", label: "Transactional Types" },
+  { key: "installment_frequencies", label: "Installment Frequencies" },
 ];
 
 export default function AdminPage() {

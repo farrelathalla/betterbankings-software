@@ -26,12 +26,19 @@ import {
   deleteBehaviour,
   updateBehaviour,
   reprocessUpload,
+  loadAllReferenceMaps,
+  listPresets,
+  createPreset,
+  updatePreset as apiUpdatePreset,
+  deletePreset as apiDeletePreset,
   UploadStatus,
   ResultRow,
   PivotGroup as APIPivotGroup,
   SummaryResponse,
   ValidationError,
   Behaviour,
+  PresetConfig,
+  ReferenceMaps,
   IRRBB_LABELS,
   LCR_LABELS,
   NSFR_LABELS,
@@ -65,6 +72,21 @@ function formatPercent(n: number): string {
   return (n * 100).toFixed(2) + "%";
 }
 
+/* ============================================================ */
+/*  REFERENCE MAP HELPERS                                       */
+/* ============================================================ */
+function mapValue(
+  refMaps: ReferenceMaps,
+  table: string,
+  rawValue: string | number | null | undefined,
+): string {
+  if (rawValue == null || rawValue === "") return "-";
+  const key = String(rawValue);
+  const map = refMaps[table];
+  if (map && map[key]) return map[key];
+  return key;
+}
+
 /** Merge principal+interest maps from a ResultRow into a single value for a bucket label */
 function getBucketValue(
   row: ResultRow,
@@ -83,7 +105,10 @@ function getBucketValue(
   return p + i;
 }
 
-function buildColumns(filterType: FilterType): ColDef[] {
+function buildColumns(
+  filterType: FilterType,
+  refMaps: ReferenceMaps,
+): ColDef[] {
   const inputCols: ColDef[] = [
     {
       key: "reporting_date",
@@ -104,7 +129,7 @@ function buildColumns(filterType: FilterType): ColDef[] {
       label: "CCY",
       group: "Input",
       type: "input",
-      getValue: (r) => r.ccy,
+      getValue: (r) => mapValue(refMaps, "currencies", r.ccy),
     },
     {
       key: "outstanding",
@@ -140,21 +165,27 @@ function buildColumns(filterType: FilterType): ColDef[] {
       group: "Input",
       type: "input",
       getValue: (r) =>
-        r.installment_frequency != null ? String(r.installment_frequency) : "-",
+        r.installment_frequency != null
+          ? mapValue(
+              refMaps,
+              "installment_frequencies",
+              r.installment_frequency,
+            )
+          : "-",
     },
     {
       key: "product_type",
       label: "Product Type",
       group: "Input",
       type: "input",
-      getValue: (r) => r.product_type,
+      getValue: (r) => mapValue(refMaps, "product_types", r.product_type),
     },
     {
       key: "segment",
       label: "Segment",
       group: "Input",
       type: "input",
-      getValue: (r) => r.segment,
+      getValue: (r) => mapValue(refMaps, "segments", r.segment),
     },
     {
       key: "daerah",
@@ -182,14 +213,15 @@ function buildColumns(filterType: FilterType): ColDef[] {
       label: "Transactional/Non",
       group: "Input",
       type: "input",
-      getValue: (r) => r.transactional_or_non,
+      getValue: (r) =>
+        mapValue(refMaps, "transactional_types", r.transactional_or_non),
     },
     {
       key: "method",
       label: "Method",
       group: "Input",
       type: "input",
-      getValue: (r) => r.method,
+      getValue: (r) => mapValue(refMaps, "methods", r.method),
     },
     {
       key: "interest_payment_frequency",
@@ -198,7 +230,11 @@ function buildColumns(filterType: FilterType): ColDef[] {
       type: "input",
       getValue: (r) =>
         r.interest_payment_frequency != null
-          ? String(r.interest_payment_frequency)
+          ? mapValue(
+              refMaps,
+              "installment_frequencies",
+              r.interest_payment_frequency,
+            )
           : "-",
     },
     {
@@ -206,7 +242,7 @@ function buildColumns(filterType: FilterType): ColDef[] {
       label: "Day Count",
       group: "Input",
       type: "input",
-      getValue: (r) => r.day_count,
+      getValue: (r) => mapValue(refMaps, "day_counts", r.day_count),
     },
     {
       key: "remaining_days",
@@ -781,6 +817,7 @@ function ResultTable({
   columnFilters,
   onApplyFilter,
   distinctValues,
+  summary,
 }: {
   data: ResultRow[];
   visibleColumns: Set<string>;
@@ -788,6 +825,7 @@ function ResultTable({
   columnFilters: Record<string, ColumnFilterState>;
   onApplyFilter: (key: string, state: ColumnFilterState) => void;
   distinctValues: Record<string, string[]>;
+  summary?: SummaryResponse | null;
 }) {
   const visibleCols = allColumns.filter((c) => visibleColumns.has(c.key));
 
@@ -832,6 +870,48 @@ function ResultTable({
           ))}
         </tbody>
       </table>
+      {/* SUM Row below table */}
+      {summary && summary.column_sums && (
+        <div className="sum-row-container">
+          <table className="data-table sum-table">
+            <tbody>
+              <tr className="sum-row">
+                {visibleCols.map((col, i) => {
+                  let cellContent: string | number = "";
+                  if (
+                    col.key === "reporting_date" ||
+                    col.key === "account_id"
+                  ) {
+                    cellContent = i === 0 ? "TOTAL" : "";
+                  } else if (col.key === "interest_rate") {
+                    cellContent = summary.avg_interest_rate
+                      ? formatPercent(summary.avg_interest_rate)
+                      : "-";
+                  } else if (col.key === "outstanding") {
+                    cellContent = formatNumber(
+                      summary.column_sums["outstanding"] || 0,
+                    );
+                  } else if (isNumericKey(col.key)) {
+                    const sumKey = col.key.replace("__", "__");
+                    const val = summary.column_sums[sumKey] || 0;
+                    cellContent = formatNumber(val);
+                  } else {
+                    cellContent = "";
+                  }
+                  return (
+                    <td
+                      key={col.key}
+                      className={`sum-cell ${getGroupBorderClass(col, visibleCols, i)}`}
+                    >
+                      {cellContent}
+                    </td>
+                  );
+                })}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -959,10 +1039,16 @@ export default function Home() {
   const [scenarios, setScenarios] = useState<Behaviour[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Reference maps
+  const [refMaps, setRefMaps] = useState<ReferenceMaps>({});
+
   // Column visibility
-  const allColumns = useMemo(() => buildColumns(filterType), [filterType]);
+  const allColumns = useMemo(
+    () => buildColumns(filterType, refMaps),
+    [filterType, refMaps],
+  );
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(
-    () => new Set(buildColumns("both").map((c) => c.key)),
+    () => new Set(buildColumns("both", {}).map((c) => c.key)),
   );
 
   // Pivot
@@ -985,6 +1071,27 @@ export default function Home() {
 
   // Export
   const [exporting, setExporting] = useState(false);
+
+  // Presets
+  const [presets, setPresets] = useState<PresetConfig[]>([]);
+  const [activePresetIds, setActivePresetIds] = useState<Set<number>>(
+    new Set(),
+  );
+  const [presetModalOpen, setPresetModalOpen] = useState(false);
+  const [editingPreset, setEditingPreset] = useState<PresetConfig | null>(null);
+  const [presetName, setPresetName] = useState("");
+  const [presetCols, setPresetCols] = useState<Set<string>>(new Set());
+
+  // Load presets on auth
+  const fetchPresets = useCallback(async () => {
+    try {
+      const list = await listPresets();
+      setPresets(list);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   // Check auth on mount + handle ?upload_id= from history page
   useEffect(() => {
     const loggedIn = isLoggedIn();
@@ -995,12 +1102,17 @@ export default function Home() {
       const params = new URLSearchParams(window.location.search);
       const existingUploadId = params.get("upload_id");
       if (existingUploadId) {
-        // Remove from URL to keep it clean
         window.history.replaceState({}, "", "/");
         setUploadId(existingUploadId);
       }
+      // Load reference maps
+      loadAllReferenceMaps()
+        .then(setRefMaps)
+        .catch(() => {});
+      // Load presets
+      fetchPresets();
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch Scenarios
   const fetchScenarios = useCallback(async () => {
@@ -1434,9 +1546,9 @@ export default function Home() {
   };
 
   const filterLabel: Record<FilterType, string> = {
-    bbi: "Installment Cashflow BBI",
-    interest: "Installment Interest",
-    both: "Combined (BBI + Interest)",
+    bbi: "Principal",
+    interest: "Interest",
+    both: "Principal + Interest",
   };
 
   const activeFilterCount = Object.keys(columnFilters).length;
@@ -1650,7 +1762,7 @@ export default function Home() {
                 className={`filter-btn ${filterType === "bbi" ? "active" : ""}`}
                 onClick={() => handleFilterTypeChange("bbi")}
               >
-                Cashflow BBI
+                Principal
               </button>
               <button
                 className={`filter-btn ${
@@ -1666,7 +1778,7 @@ export default function Home() {
                 }`}
                 onClick={() => handleFilterTypeChange("both")}
               >
-                Both (Sum)
+                Principal + Interest
               </button>
             </div>
           </div>
@@ -1733,13 +1845,101 @@ export default function Home() {
               onTogglePivotRow={togglePivotRow}
             />
 
+            {/* PRESET MANAGER */}
+            <div
+              className="column-selector"
+              style={{
+                marginTop: "0.75rem",
+                top: "auto",
+                position: "relative",
+                maxHeight: "none",
+              }}
+            >
+              <div className="preset-section">
+                <div className="preset-section-title">
+                  <span>🗂️ Presets</span>
+                </div>
+                <div className="preset-list">
+                  {presets.map((p) => (
+                    <div key={p.id} className="preset-item">
+                      <input
+                        type="checkbox"
+                        checked={activePresetIds.has(p.id!)}
+                        onChange={() => {
+                          setActivePresetIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(p.id!)) next.delete(p.id!);
+                            else next.add(p.id!);
+                            return next;
+                          });
+                        }}
+                      />
+                      <span className="preset-item-name">{p.name}</span>
+                      <div className="preset-item-actions">
+                        <button
+                          className="preset-item-btn"
+                          onClick={() => {
+                            setEditingPreset(p);
+                            setPresetName(p.name);
+                            setPresetCols(
+                              new Set(
+                                p.config?.visibleColumns ||
+                                  allColumns.map((c) => c.key),
+                              ),
+                            );
+                            setPresetModalOpen(true);
+                          }}
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          className="preset-item-btn delete"
+                          onClick={async () => {
+                            if (!confirm(`Delete preset "${p.name}"?`)) return;
+                            try {
+                              await apiDeletePreset(p.id!);
+                              setPresets((prev) =>
+                                prev.filter((x) => x.id !== p.id),
+                              );
+                              setActivePresetIds((prev) => {
+                                const next = new Set(prev);
+                                next.delete(p.id!);
+                                return next;
+                              });
+                            } catch {
+                              /* ignore */
+                            }
+                          }}
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  className="btn-new-preset"
+                  onClick={() => {
+                    setEditingPreset(null);
+                    setPresetName("");
+                    setPresetCols(new Set(allColumns.map((c) => c.key)));
+                    setPresetModalOpen(true);
+                  }}
+                >
+                  + New Preset
+                </button>
+              </div>
+            </div>
+
             <div className="results-main">
               <div className="results-header">
                 <h2>{filterLabel[filterType]}</h2>
                 <span className="results-badge">
                   {filterType === "both"
-                    ? "BBI + Interest"
-                    : filterType.toUpperCase()}
+                    ? "Principal + Interest"
+                    : filterType === "bbi"
+                      ? "PRINCIPAL"
+                      : filterType.toUpperCase()}
                 </span>
                 <button
                   className="btn-export"
@@ -1777,6 +1977,7 @@ export default function Home() {
                     columnFilters={columnFilters}
                     onApplyFilter={handleApplyFilter}
                     distinctValues={distinctValues}
+                    summary={summary}
                   />
                   {currentPage < totalPages && (
                     <div className="load-more-container">
@@ -1806,6 +2007,137 @@ export default function Home() {
               Upload a CSV/TXT file with your loan data, then click{" "}
               <strong>&quot;Process Cashflow&quot;</strong> to see the results.
             </p>
+          </div>
+        )}
+
+        {/* PRESET TABLES */}
+        {processed && activePresetIds.size > 0 && (
+          <div className="preset-tables-container fade-in">
+            {presets
+              .filter((p) => activePresetIds.has(p.id!))
+              .map((p) => {
+                const presetVisibleCols = new Set<string>(
+                  p.config?.visibleColumns || allColumns.map((c) => c.key),
+                );
+                const presetFilteredResults = results.filter((row) => {
+                  // Apply value filters from preset
+                  const filters = p.config?.valueFilters || [];
+                  for (const f of filters) {
+                    const rawVal = String(
+                      (row as unknown as Record<string, unknown>)[f.column] ??
+                        "",
+                    );
+                    if (f.excludeValues.includes(rawVal)) return false;
+                  }
+                  return true;
+                });
+
+                return (
+                  <div key={p.id} className="preset-table-section">
+                    <div className="preset-table-header">
+                      <h3>📋 {p.name}</h3>
+                      <span>{presetFilteredResults.length} rows</span>
+                    </div>
+                    <ResultTable
+                      data={presetFilteredResults}
+                      visibleColumns={presetVisibleCols}
+                      allColumns={allColumns}
+                      columnFilters={{}}
+                      onApplyFilter={() => {}}
+                      distinctValues={distinctValues}
+                      summary={summary}
+                    />
+                  </div>
+                );
+              })}
+          </div>
+        )}
+
+        {/* PRESET EDITOR MODAL */}
+        {presetModalOpen && (
+          <div
+            className="preset-modal-overlay"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setPresetModalOpen(false);
+            }}
+          >
+            <div className="preset-modal">
+              <h3>{editingPreset ? "Edit Preset" : "New Preset"}</h3>
+
+              <div className="preset-modal-field">
+                <label className="preset-modal-label">Name</label>
+                <input
+                  className="preset-modal-input"
+                  value={presetName}
+                  onChange={(e) => setPresetName(e.target.value)}
+                  placeholder="e.g. Tampilan A"
+                />
+              </div>
+
+              <div className="preset-modal-field">
+                <label className="preset-modal-label">Visible Columns</label>
+                <div className="preset-modal-columns">
+                  {allColumns.map((col) => (
+                    <button
+                      key={col.key}
+                      className={`preset-col-chip ${presetCols.has(col.key) ? "selected" : ""}`}
+                      onClick={() => {
+                        setPresetCols((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(col.key)) next.delete(col.key);
+                          else next.add(col.key);
+                          return next;
+                        });
+                      }}
+                    >
+                      {col.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="preset-modal-actions">
+                <button
+                  className="btn-preset-cancel"
+                  onClick={() => setPresetModalOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="btn-preset-save"
+                  onClick={async () => {
+                    if (!presetName.trim()) return;
+                    const config: PresetConfig["config"] = {
+                      visibleColumns: Array.from(presetCols),
+                      pivotRows: [],
+                      valueOrdering: [],
+                      valueFilters: [],
+                    };
+                    try {
+                      if (editingPreset?.id) {
+                        await apiUpdatePreset(
+                          editingPreset.id,
+                          presetName,
+                          config,
+                        );
+                      } else {
+                        await createPreset(presetName, config);
+                      }
+                      await fetchPresets();
+                      setPresetModalOpen(false);
+                    } catch (err) {
+                      alert(
+                        err instanceof Error
+                          ? err.message
+                          : "Failed to save preset",
+                      );
+                    }
+                  }}
+                >
+                  {editingPreset ? "Update" : "Create"}
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>

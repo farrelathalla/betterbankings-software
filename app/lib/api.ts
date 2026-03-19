@@ -256,8 +256,10 @@ export async function getResults(
 export interface SummaryResponse {
   total_count: number;
   total_outstanding: number;
+  avg_interest_rate: number;
   currencies: string[];
   bucket_totals: Record<string, number>;
+  column_sums: Record<string, number>;
 }
 
 export async function getSummary(
@@ -502,7 +504,15 @@ export async function uploadBehaviour(
   });
   if (!res.ok) {
     const data = await res.json();
-    throw new Error(data.error || "Failed to upload behaviour");
+    const mainError = data.error || "Failed to upload behaviour";
+    if (
+      data.details &&
+      Array.isArray(data.details) &&
+      data.details.length > 0
+    ) {
+      throw new Error(`${mainError}:\n\n${data.details.join("\n")}`);
+    }
+    throw new Error(mainError);
   }
   return res.json();
 }
@@ -541,7 +551,15 @@ export async function updateBehaviour(
   });
   if (!res.ok) {
     const data = await res.json();
-    throw new Error(data.error || "Failed to update behaviour");
+    const mainError = data.error || "Failed to update behaviour";
+    if (
+      data.details &&
+      Array.isArray(data.details) &&
+      data.details.length > 0
+    ) {
+      throw new Error(`${mainError}:\n\n${data.details.join("\n")}`);
+    }
+    throw new Error(mainError);
   }
 }
 
@@ -555,4 +573,85 @@ export async function reprocessUpload(uploadId: string): Promise<void> {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to trigger reprocess");
+}
+
+// ─── Reference Maps ─────────────────────────────────────────
+
+export type ReferenceMaps = Record<string, Record<string, string>>;
+
+export async function loadAllReferenceMaps(): Promise<ReferenceMaps> {
+  const res = await fetch(`${API_BASE}/api/reference-maps`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) return {};
+  const data: Record<string, { id: string; name: string }[]> = await res.json();
+  const maps: ReferenceMaps = {};
+  for (const [table, items] of Object.entries(data)) {
+    maps[table] = {};
+    for (const item of items) {
+      maps[table][item.id] = item.name;
+    }
+  }
+  return maps;
+}
+
+// ─── Presets ────────────────────────────────────────────────
+
+export interface PresetConfig {
+  id?: number;
+  name: string;
+  config: {
+    visibleColumns: string[];
+    pivotRows: string[];
+    valueOrdering: { column: string; values: string[] }[];
+    valueFilters: { column: string; excludeValues: string[] }[];
+  };
+}
+
+export async function listPresets(): Promise<PresetConfig[]> {
+  const res = await fetch(`${API_BASE}/api/presets`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function createPreset(
+  name: string,
+  config: PresetConfig["config"],
+): Promise<{ id: number; name: string }> {
+  const res = await fetch(`${API_BASE}/api/presets`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ name, config }),
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to create preset");
+  }
+  return res.json();
+}
+
+export async function updatePreset(
+  id: number,
+  name: string,
+  config: PresetConfig["config"],
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/presets/${id}`, {
+    method: "PUT",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ name, config }),
+  });
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error || "Failed to update preset");
+  }
+}
+
+export async function deletePreset(id: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/presets/${id}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to delete preset");
 }
