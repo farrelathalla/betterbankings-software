@@ -309,7 +309,7 @@ export async function getPivot(
   uploadId: string,
   pivotKeys: string[],
   filterType: string = "both",
-  filters: Record<string, string> = {},
+  filters: Record<string, string | string[]> = {},
   behaviourId?: string | number | null,
 ): Promise<PivotGroup[]> {
   const searchParams = new URLSearchParams();

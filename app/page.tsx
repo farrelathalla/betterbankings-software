@@ -609,6 +609,152 @@ function FilterDropdown({
 /* ============================================================ */
 /*  COLUMN SELECTOR COMPONENT                                   */
 /* ============================================================ */
+function PresetView({
+  preset: p,
+  allColumns,
+  results,
+  distinctValues,
+  summary,
+  uploadId,
+  filterType,
+  behaviourId,
+}: {
+  preset: PresetConfig;
+  allColumns: ColDef[];
+  results: ResultRow[];
+  distinctValues: Record<string, string[]>;
+  summary: SummaryResponse | null;
+  uploadId: string;
+  filterType: string;
+  behaviourId: number | null;
+}) {
+  const [pivotData, setPivotData] = useState<APIPivotGroup[]>([]);
+  const [pivotLoading, setPivotLoading] = useState(false);
+
+  const pivotRows = p.config?.pivotRows || [];
+  const isPivot = pivotRows.length > 0;
+
+  useEffect(() => {
+    if (isPivot && uploadId) {
+      setPivotLoading(true);
+      // Construct inclusion filters for the pivot API.
+      // Preset stores excludeValues. Inclusion = All - Exclude.
+      const filters: Record<string, string[]> = {};
+      (p.config?.valueFilters || []).forEach((f) => {
+        const allVals = distinctValues[f.column] || [];
+        const allowed = allVals.filter((v) => !f.excludeValues.includes(v));
+        if (allowed.length < allVals.length) {
+          filters[f.column] = allowed;
+        }
+      });
+
+      // We need to cast filters to any because our lib type might still be Record<string, string>
+      getPivot(uploadId, pivotRows, filterType, filters as any, behaviourId)
+        .then(setPivotData)
+        .catch(console.error)
+        .finally(() => setPivotLoading(false));
+    }
+  }, [
+    isPivot,
+    uploadId,
+    pivotRows,
+    filterType,
+    behaviourId,
+    p.config?.valueFilters,
+    distinctValues,
+  ]);
+
+  const presetVisibleCols = useMemo(
+    () =>
+      new Set<string>(p.config?.visibleColumns || allColumns.map((c) => c.key)),
+    [p.config?.visibleColumns, allColumns],
+  );
+
+  const presetFilteredSortedData = useMemo(() => {
+    let data = results.filter((row) => {
+      const filters = p.config?.valueFilters || [];
+      for (const f of filters) {
+        const rawVal = String((row as any)[f.column] ?? "");
+        if (f.excludeValues.includes(rawVal)) return false;
+      }
+      return true;
+    });
+
+    const ordering = p.config?.valueOrdering || [];
+    if (ordering.length > 0) {
+      data = [...data].sort((a, b) => {
+        for (const ord of ordering) {
+          const aVal = String((a as any)[ord.column] ?? "");
+          const bVal = String((b as any)[ord.column] ?? "");
+          const aIdx = ord.values.indexOf(aVal);
+          const bIdx = ord.values.indexOf(bVal);
+          const aPri = aIdx === -1 ? 999 : aIdx;
+          const bPri = bIdx === -1 ? 999 : bIdx;
+          if (aPri !== bPri) return aPri - bPri;
+        }
+        return 0;
+      });
+    }
+    return data;
+  }, [results, p.config?.valueFilters, p.config?.valueOrdering]);
+
+  return (
+    <div className="preset-table-section">
+      <div className="preset-table-header">
+        <h3>
+          📋 {p.name} {isPivot ? "(Pivot View)" : "(List View)"}
+        </h3>
+        <span
+          className="results-badge"
+          style={{
+            background: isPivot ? "var(--blue-600)" : "var(--orange-500)",
+          }}
+        >
+          {isPivot ? "PIVOT" : "LIST"}
+        </span>
+        <span
+          style={{
+            fontSize: "0.75rem",
+            color: "var(--gray-400)",
+            marginLeft: "1rem",
+          }}
+        >
+          {isPivot
+            ? `${pivotData.length} groups`
+            : `${presetFilteredSortedData.length} rows`}
+        </span>
+      </div>
+
+      {isPivot ? (
+        pivotLoading ? (
+          <div className="loading-container" style={{ minHeight: "100px" }}>
+            <div className="loading-spinner"></div>
+            <p>Fetching pivot data...</p>
+          </div>
+        ) : (
+          <PivotTableView
+            pivotData={pivotData}
+            pivotRows={pivotRows}
+            visibleColumns={presetVisibleCols}
+            allColumns={allColumns}
+            onDrillDown={() => {}}
+          />
+        )
+      ) : (
+        <ResultTable
+          data={presetFilteredSortedData}
+          visibleColumns={presetVisibleCols}
+          allColumns={allColumns}
+          columnFilters={{}}
+          onApplyFilter={() => {}}
+          distinctValues={distinctValues}
+          summary={summary}
+        />
+      )}
+    </div>
+  );
+}
+
 function ColumnSelector({
   allColumns,
   visibleColumns,
@@ -1074,6 +1220,13 @@ export default function Home() {
   const [editingPreset, setEditingPreset] = useState<PresetConfig | null>(null);
   const [presetName, setPresetName] = useState("");
   const [presetCols, setPresetCols] = useState<Set<string>>(new Set());
+  const [presetPivots, setPresetPivots] = useState<string[]>([]);
+  const [presetValueFilters, setPresetValueFilters] = useState<
+    { column: string; allowedValues: string[] }[]
+  >([]);
+  const [presetValueOrdering, setPresetValueOrdering] = useState<
+    { column: string; values: string[] }[]
+  >([]);
 
   // Load presets on auth
   const fetchPresets = useCallback(async () => {
@@ -1859,6 +2012,16 @@ export default function Home() {
                               allColumns.map((c) => c.key),
                           ),
                         );
+                        setPresetPivots(p.config?.pivotRows || []);
+                        // Convert excludeValues to allowedValues for the UI
+                        const vf = (p.config?.valueFilters || []).map((f) => ({
+                          column: f.column,
+                          allowedValues: (
+                            distinctValues[f.column] || []
+                          ).filter((v) => !f.excludeValues.includes(v)),
+                        }));
+                        setPresetValueFilters(vf);
+                        setPresetValueOrdering(p.config?.valueOrdering || []);
                         setPresetModalOpen(true);
                       }}
                     >
@@ -1896,6 +2059,9 @@ export default function Home() {
                 setEditingPreset(null);
                 setPresetName("");
                 setPresetCols(new Set(allColumns.map((c) => c.key)));
+                setPresetPivots([]);
+                setPresetValueFilters([]);
+                setPresetValueOrdering([]);
                 setPresetModalOpen(true);
               }}
             >
@@ -1999,41 +2165,19 @@ export default function Home() {
           <div className="preset-tables-container fade-in">
             {presets
               .filter((p) => activePresetIds.has(p.id!))
-              .map((p) => {
-                const presetVisibleCols = new Set<string>(
-                  p.config?.visibleColumns || allColumns.map((c) => c.key),
-                );
-                const presetFilteredResults = results.filter((row) => {
-                  // Apply value filters from preset
-                  const filters = p.config?.valueFilters || [];
-                  for (const f of filters) {
-                    const rawVal = String(
-                      (row as unknown as Record<string, unknown>)[f.column] ??
-                        "",
-                    );
-                    if (f.excludeValues.includes(rawVal)) return false;
-                  }
-                  return true;
-                });
-
-                return (
-                  <div key={p.id} className="preset-table-section">
-                    <div className="preset-table-header">
-                      <h3>📋 {p.name}</h3>
-                      <span>{presetFilteredResults.length} rows</span>
-                    </div>
-                    <ResultTable
-                      data={presetFilteredResults}
-                      visibleColumns={presetVisibleCols}
-                      allColumns={allColumns}
-                      columnFilters={{}}
-                      onApplyFilter={() => {}}
-                      distinctValues={distinctValues}
-                      summary={summary}
-                    />
-                  </div>
-                );
-              })}
+              .map((p) => (
+                <PresetView
+                  key={p.id}
+                  preset={p}
+                  allColumns={allColumns}
+                  results={results}
+                  distinctValues={distinctValues}
+                  summary={summary}
+                  uploadId={uploadId || ""}
+                  filterType={filterType}
+                  behaviourId={activeBehaviourId}
+                />
+              ))}
           </div>
         )}
 
@@ -2048,6 +2192,7 @@ export default function Home() {
             <div className="preset-modal">
               <h3>{editingPreset ? "Edit Preset" : "New Preset"}</h3>
 
+              {/* NAME */}
               <div className="preset-modal-field">
                 <label className="preset-modal-label">Name</label>
                 <input
@@ -2058,26 +2203,345 @@ export default function Home() {
                 />
               </div>
 
+              {/* COLUMNS — group-based like ColumnSelector */}
               <div className="preset-modal-field">
-                <label className="preset-modal-label">Visible Columns</label>
-                <div className="preset-modal-columns">
-                  {allColumns.map((col) => (
-                    <button
-                      key={col.key}
-                      className={`preset-col-chip ${presetCols.has(col.key) ? "selected" : ""}`}
-                      onClick={() => {
-                        setPresetCols((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(col.key)) next.delete(col.key);
-                          else next.add(col.key);
-                          return next;
-                        });
+                <label className="preset-modal-label">Columns</label>
+                <div
+                  className="preset-modal-columns"
+                  style={{ flexDirection: "column", gap: "4px" }}
+                >
+                  {getColumnGroups(allColumns).map((group) => {
+                    const allChecked = group.columns.every((k) =>
+                      presetCols.has(k),
+                    );
+                    const someChecked = group.columns.some((k) =>
+                      presetCols.has(k),
+                    );
+                    return (
+                      <div key={group.name} style={{ marginBottom: "4px" }}>
+                        <label
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "0.4rem",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={allChecked}
+                            ref={(el) => {
+                              if (el)
+                                el.indeterminate = someChecked && !allChecked;
+                            }}
+                            onChange={() => {
+                              setPresetCols((prev) => {
+                                const next = new Set(prev);
+                                if (allChecked) {
+                                  group.columns.forEach((k) => next.delete(k));
+                                } else {
+                                  group.columns.forEach((k) => next.add(k));
+                                }
+                                return next;
+                              });
+                            }}
+                            style={{ accentColor: "var(--orange-500)" }}
+                          />
+                          <span
+                            style={{
+                              fontSize: "0.78rem",
+                              fontWeight: 700,
+                              color: "var(--orange-400)",
+                              textTransform: "uppercase",
+                              letterSpacing: "0.04em",
+                            }}
+                          >
+                            {group.name}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: "0.68rem",
+                              color: "var(--gray-500)",
+                              marginLeft: "auto",
+                            }}
+                          >
+                            (
+                            {
+                              group.columns.filter((k) => presetCols.has(k))
+                                .length
+                            }
+                            /{group.columns.length})
+                          </span>
+                        </label>
+                        <div
+                          style={{
+                            paddingLeft: "1.2rem",
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: "4px",
+                            marginTop: "2px",
+                          }}
+                        >
+                          {group.columns.map((key) => {
+                            const col = allColumns.find((c) => c.key === key);
+                            if (!col) return null;
+                            return (
+                              <button
+                                key={key}
+                                className={`preset-col-chip ${presetCols.has(key) ? "selected" : ""}`}
+                                onClick={() => {
+                                  setPresetCols((prev) => {
+                                    const next = new Set(prev);
+                                    next.has(key)
+                                      ? next.delete(key)
+                                      : next.add(key);
+                                    return next;
+                                  });
+                                }}
+                              >
+                                {col.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* PIVOT ROWS */}
+              <div className="preset-modal-field">
+                <label className="preset-modal-label">Pivot Rows</label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                  {PIVOTABLE_KEYS.map((key) => {
+                    const col = allColumns.find((c) => c.key === key);
+                    if (!col) return null;
+                    const isActive = presetPivots.includes(key);
+                    return (
+                      <button
+                        key={key}
+                        className={`pivot-btn ${isActive ? "active" : ""}`}
+                        onClick={() => {
+                          setPresetPivots((prev) =>
+                            prev.includes(key)
+                              ? prev.filter((k) => k !== key)
+                              : [...prev, key],
+                          );
+                        }}
+                      >
+                        {col.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* VALUE FILTERS & ORDERING */}
+              <div className="preset-modal-field">
+                <label className="preset-modal-label">
+                  Value Filters & Ordering
+                </label>
+                <div
+                  style={{
+                    fontSize: "0.72rem",
+                    color: "var(--gray-400)",
+                    marginBottom: "0.5rem",
+                  }}
+                >
+                  Select which values to include per column. Drag or reorder to
+                  set priority.
+                </div>
+                {PIVOTABLE_KEYS.map((key) => {
+                  const col = allColumns.find((c) => c.key === key);
+                  if (!col) return null;
+                  const allVals = distinctValues[key] || [];
+                  if (allVals.length === 0) return null;
+
+                  const currentFilter = presetValueFilters.find(
+                    (f) => f.column === key,
+                  );
+                  const currentOrder = presetValueOrdering.find(
+                    (o) => o.column === key,
+                  );
+                  const allowedVals = currentFilter?.allowedValues || allVals;
+                  const orderedVals = currentOrder?.values || [];
+
+                  return (
+                    <div
+                      key={key}
+                      style={{
+                        marginBottom: "0.6rem",
+                        padding: "0.5rem",
+                        background: "rgba(0,0,0,0.15)",
+                        borderRadius: "8px",
+                        border: "1px solid rgba(255,255,255,0.06)",
                       }}
                     >
-                      {col.label}
-                    </button>
-                  ))}
-                </div>
+                      <div
+                        style={{
+                          fontSize: "0.75rem",
+                          fontWeight: 700,
+                          color: "var(--orange-400)",
+                          marginBottom: "0.35rem",
+                        }}
+                      >
+                        {col.label}
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: "4px",
+                        }}
+                      >
+                        {allVals.map((val) => {
+                          const isIncluded = allowedVals.includes(val);
+                          const orderIdx = orderedVals.indexOf(val);
+                          return (
+                            <button
+                              key={val}
+                              className={`preset-col-chip ${isIncluded ? "selected" : ""}`}
+                              onClick={() => {
+                                // Toggle inclusion
+                                setPresetValueFilters((prev) => {
+                                  const existing = prev.find(
+                                    (f) => f.column === key,
+                                  );
+                                  if (existing) {
+                                    const newAllowed = isIncluded
+                                      ? existing.allowedValues.filter(
+                                          (v) => v !== val,
+                                        )
+                                      : [...existing.allowedValues, val];
+                                    return prev.map((f) =>
+                                      f.column === key
+                                        ? { ...f, allowedValues: newAllowed }
+                                        : f,
+                                    );
+                                  } else {
+                                    // First time: exclude this one value
+                                    return [
+                                      ...prev,
+                                      {
+                                        column: key,
+                                        allowedValues: allVals.filter(
+                                          (v) => v !== val,
+                                        ),
+                                      },
+                                    ];
+                                  }
+                                });
+                                // Also update ordering: if removing, remove from order
+                                if (isIncluded) {
+                                  setPresetValueOrdering((prev) =>
+                                    prev.map((o) =>
+                                      o.column === key
+                                        ? {
+                                            ...o,
+                                            values: o.values.filter(
+                                              (v) => v !== val,
+                                            ),
+                                          }
+                                        : o,
+                                    ),
+                                  );
+                                }
+                              }}
+                              style={{ position: "relative" }}
+                            >
+                              {val || "(empty)"}
+                              {isIncluded && orderIdx >= 0 && (
+                                <span
+                                  style={{
+                                    position: "absolute",
+                                    top: "-4px",
+                                    right: "-4px",
+                                    background: "var(--orange-500)",
+                                    color: "white",
+                                    borderRadius: "50%",
+                                    width: "14px",
+                                    height: "14px",
+                                    fontSize: "0.55rem",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    fontWeight: 800,
+                                  }}
+                                >
+                                  {orderIdx + 1}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {/* Ordering: click on included values to set priority */}
+                      {allowedVals.length > 0 &&
+                        allowedVals.length < allVals.length && (
+                          <div
+                            style={{
+                              marginTop: "0.35rem",
+                              fontSize: "0.68rem",
+                              color: "var(--gray-500)",
+                            }}
+                          >
+                            Order priority (click to add/remove):
+                            <div
+                              style={{
+                                display: "flex",
+                                gap: "4px",
+                                marginTop: "2px",
+                                flexWrap: "wrap",
+                              }}
+                            >
+                              {allowedVals.map((val) => {
+                                const idx = orderedVals.indexOf(val);
+                                return (
+                                  <button
+                                    key={val}
+                                    className={`preset-col-chip ${idx >= 0 ? "selected" : ""}`}
+                                    style={{
+                                      fontSize: "0.65rem",
+                                      padding: "0.15rem 0.4rem",
+                                    }}
+                                    onClick={() => {
+                                      setPresetValueOrdering((prev) => {
+                                        const existing = prev.find(
+                                          (o) => o.column === key,
+                                        );
+                                        if (existing) {
+                                          const newVals =
+                                            idx >= 0
+                                              ? existing.values.filter(
+                                                  (v) => v !== val,
+                                                )
+                                              : [...existing.values, val];
+                                          return prev.map((o) =>
+                                            o.column === key
+                                              ? { ...o, values: newVals }
+                                              : o,
+                                          );
+                                        } else {
+                                          return [
+                                            ...prev,
+                                            { column: key, values: [val] },
+                                          ];
+                                        }
+                                      });
+                                    }}
+                                  >
+                                    {idx >= 0 ? `${idx + 1}. ` : ""}
+                                    {val || "(empty)"}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="preset-modal-actions">
@@ -2091,11 +2555,28 @@ export default function Home() {
                   className="btn-preset-save"
                   onClick={async () => {
                     if (!presetName.trim()) return;
+                    // Convert allowedValues to excludeValues for storage
+                    const valueFilters = presetValueFilters
+                      .filter((f) => {
+                        const allVals = distinctValues[f.column] || [];
+                        return f.allowedValues.length < allVals.length;
+                      })
+                      .map((f) => {
+                        const allVals = distinctValues[f.column] || [];
+                        return {
+                          column: f.column,
+                          excludeValues: allVals.filter(
+                            (v) => !f.allowedValues.includes(v),
+                          ),
+                        };
+                      });
                     const config: PresetConfig["config"] = {
                       visibleColumns: Array.from(presetCols),
-                      pivotRows: [],
-                      valueOrdering: [],
-                      valueFilters: [],
+                      pivotRows: presetPivots,
+                      valueOrdering: presetValueOrdering.filter(
+                        (o) => o.values.length > 0,
+                      ),
+                      valueFilters,
                     };
                     try {
                       if (editingPreset?.id) {
