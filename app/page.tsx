@@ -869,49 +869,42 @@ function ResultTable({
             </tr>
           ))}
         </tbody>
-      </table>
-      {/* SUM Row below table */}
-      {summary && summary.column_sums && (
-        <div className="sum-row-container">
-          <table className="data-table sum-table">
-            <tbody>
-              <tr className="sum-row">
-                {visibleCols.map((col, i) => {
-                  let cellContent: string | number = "";
-                  if (
-                    col.key === "reporting_date" ||
-                    col.key === "account_id"
-                  ) {
-                    cellContent = i === 0 ? "TOTAL" : "";
-                  } else if (col.key === "interest_rate") {
-                    cellContent = summary.avg_interest_rate
-                      ? formatPercent(summary.avg_interest_rate)
-                      : "-";
-                  } else if (col.key === "outstanding") {
-                    cellContent = formatNumber(
-                      summary.column_sums["outstanding"] || 0,
-                    );
-                  } else if (isNumericKey(col.key)) {
-                    const sumKey = col.key.replace("__", "__");
-                    const val = summary.column_sums[sumKey] || 0;
-                    cellContent = formatNumber(val);
-                  } else {
-                    cellContent = "";
-                  }
-                  return (
-                    <td
-                      key={col.key}
-                      className={`sum-cell ${getGroupBorderClass(col, visibleCols, i)}`}
-                    >
-                      {cellContent}
-                    </td>
+        {/* SUM Row as tfoot — same table so columns align */}
+        {summary && summary.column_sums && (
+          <tfoot>
+            <tr className="sum-row">
+              {visibleCols.map((col, i) => {
+                let cellContent: string | number = "";
+                if (col.key === "reporting_date" || col.key === "account_id") {
+                  cellContent = i === 0 ? "TOTAL" : "";
+                } else if (col.key === "interest_rate") {
+                  cellContent = summary.avg_interest_rate
+                    ? formatPercent(summary.avg_interest_rate)
+                    : "-";
+                } else if (col.key === "outstanding") {
+                  cellContent = formatNumber(
+                    summary.column_sums["outstanding"] || 0,
                   );
-                })}
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      )}
+                } else if (isNumericKey(col.key)) {
+                  const sumKey = col.key.replace("__", "__");
+                  const val = summary.column_sums[sumKey] || 0;
+                  cellContent = formatNumber(val);
+                } else {
+                  cellContent = "";
+                }
+                return (
+                  <td
+                    key={col.key}
+                    className={`sum-cell ${getGroupBorderClass(col, visibleCols, i)}`}
+                  >
+                    {cellContent}
+                  </td>
+                );
+              })}
+            </tr>
+          </tfoot>
+        )}
+      </table>
     </div>
   );
 }
@@ -1834,6 +1827,83 @@ export default function Home() {
           </div>
         )}
 
+        {/* PRESET BAR */}
+        {processed && (
+          <div className="preset-bar fade-in">
+            <span className="preset-bar-label">🗂️ Presets</span>
+            <div className="preset-bar-items">
+              {presets.map((p) => (
+                <div key={p.id} className="preset-item">
+                  <input
+                    type="checkbox"
+                    checked={activePresetIds.has(p.id!)}
+                    onChange={() => {
+                      setActivePresetIds((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(p.id!)) next.delete(p.id!);
+                        else next.add(p.id!);
+                        return next;
+                      });
+                    }}
+                  />
+                  <span className="preset-item-name">{p.name}</span>
+                  <div className="preset-item-actions">
+                    <button
+                      className="preset-item-btn"
+                      onClick={() => {
+                        setEditingPreset(p);
+                        setPresetName(p.name);
+                        setPresetCols(
+                          new Set(
+                            p.config?.visibleColumns ||
+                              allColumns.map((c) => c.key),
+                          ),
+                        );
+                        setPresetModalOpen(true);
+                      }}
+                    >
+                      ✏️
+                    </button>
+                    <button
+                      className="preset-item-btn delete"
+                      onClick={async () => {
+                        if (!confirm(`Delete preset "${p.name}"?`)) return;
+                        try {
+                          await apiDeletePreset(p.id!);
+                          setPresets((prev) =>
+                            prev.filter((x) => x.id !== p.id),
+                          );
+                          setActivePresetIds((prev) => {
+                            const next = new Set(prev);
+                            next.delete(p.id!);
+                            return next;
+                          });
+                        } catch {
+                          /* ignore */
+                        }
+                      }}
+                    >
+                      🗑️
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button
+              className="btn-new-preset"
+              style={{ width: "auto", marginTop: 0 }}
+              onClick={() => {
+                setEditingPreset(null);
+                setPresetName("");
+                setPresetCols(new Set(allColumns.map((c) => c.key)));
+                setPresetModalOpen(true);
+              }}
+            >
+              + New Preset
+            </button>
+          </div>
+        )}
+
         {/* COLUMN SELECTOR & RESULTS */}
         {processed && (
           <div className="results-layout fade-in">
@@ -1844,92 +1914,6 @@ export default function Home() {
               pivotRows={pivotRows}
               onTogglePivotRow={togglePivotRow}
             />
-
-            {/* PRESET MANAGER */}
-            <div
-              className="column-selector"
-              style={{
-                marginTop: "0.75rem",
-                top: "auto",
-                position: "relative",
-                maxHeight: "none",
-              }}
-            >
-              <div className="preset-section">
-                <div className="preset-section-title">
-                  <span>🗂️ Presets</span>
-                </div>
-                <div className="preset-list">
-                  {presets.map((p) => (
-                    <div key={p.id} className="preset-item">
-                      <input
-                        type="checkbox"
-                        checked={activePresetIds.has(p.id!)}
-                        onChange={() => {
-                          setActivePresetIds((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(p.id!)) next.delete(p.id!);
-                            else next.add(p.id!);
-                            return next;
-                          });
-                        }}
-                      />
-                      <span className="preset-item-name">{p.name}</span>
-                      <div className="preset-item-actions">
-                        <button
-                          className="preset-item-btn"
-                          onClick={() => {
-                            setEditingPreset(p);
-                            setPresetName(p.name);
-                            setPresetCols(
-                              new Set(
-                                p.config?.visibleColumns ||
-                                  allColumns.map((c) => c.key),
-                              ),
-                            );
-                            setPresetModalOpen(true);
-                          }}
-                        >
-                          ✏️
-                        </button>
-                        <button
-                          className="preset-item-btn delete"
-                          onClick={async () => {
-                            if (!confirm(`Delete preset "${p.name}"?`)) return;
-                            try {
-                              await apiDeletePreset(p.id!);
-                              setPresets((prev) =>
-                                prev.filter((x) => x.id !== p.id),
-                              );
-                              setActivePresetIds((prev) => {
-                                const next = new Set(prev);
-                                next.delete(p.id!);
-                                return next;
-                              });
-                            } catch {
-                              /* ignore */
-                            }
-                          }}
-                        >
-                          🗑️
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <button
-                  className="btn-new-preset"
-                  onClick={() => {
-                    setEditingPreset(null);
-                    setPresetName("");
-                    setPresetCols(new Set(allColumns.map((c) => c.key)));
-                    setPresetModalOpen(true);
-                  }}
-                >
-                  + New Preset
-                </button>
-              </div>
-            </div>
 
             <div className="results-main">
               <div className="results-header">

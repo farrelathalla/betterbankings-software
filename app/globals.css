@@ -1916,34 +1916,52 @@ body {
 }
 
 /* ======================== */
-/*   SUM ROW                */
+/*   SUM ROW (tfoot)        */
 /* ======================== */
-.sum-row-container {
-  border-top: 2px solid var(--orange-500);
-  background: linear-gradient(
-    180deg,
-    rgba(249, 115, 22, 0.08) 0%,
-    var(--blue-800) 100%
-  );
-}
-
-.sum-table {
-  border-radius: 0 !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-
-.sum-row td {
+.data-table tfoot .sum-row td {
   padding: 0.65rem 0.6rem;
   font-weight: 800;
   color: var(--orange-400);
   font-size: 0.8rem;
+  border-top: 2px solid var(--orange-500);
   border-bottom: none;
-  background: transparent;
+  background: linear-gradient(
+    180deg,
+    rgba(249, 115, 22, 0.1) 0%,
+    var(--blue-800) 100%
+  );
+  position: sticky;
+  bottom: 0;
+  white-space: nowrap;
 }
 
-.sum-cell {
+/* ======================== */
+/*   PRESET BAR (horizontal)*/
+/* ======================== */
+.preset-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  background: linear-gradient(135deg, var(--blue-800), rgba(30, 58, 95, 0.9));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.preset-bar-label {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: white;
   white-space: nowrap;
+}
+
+.preset-bar-items {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
 }
 
 /* ======================== */
