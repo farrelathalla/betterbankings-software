@@ -196,6 +196,7 @@ export interface ResultRow {
   row_number: number;
   reporting_date: string;
   account_id: string;
+  account_number: string;
   ccy: string;
   outstanding: number;
   interest_rate: number;
@@ -211,6 +212,11 @@ export interface ResultRow {
   method: string;
   interest_payment_frequency: number | null;
   day_count: string;
+  instrument_type: string;
+  market_value: number;
+  asset_liability: number;
+  margin: number;
+  revolving_flag: string;
   remaining_days: number;
   result_type: string;
   // Principal buckets
@@ -400,6 +406,24 @@ export const IRRBB_LABELS = [
 
 export const LCR_LABELS = ["CF <= 30D", "CF > 30D"];
 export const NSFR_LABELS = ["CF < 6M", "CF 6M to 12M", "CF > 12M"];
+
+export const ILAAP_LABELS = [
+  "No Maturity",
+  "D-1", "D-2", "D-3", "D-4", "D-5", "D-6", "D-7", "D-8", "D-9", "D-10",
+  "D-11", "D-12", "D-13", "D-14", "D-15", "D-16", "D-17", "D-18", "D-19", "D-20",
+  "D-21", "D-22", "D-23", "D-24", "D-25", "D-26", "D-27", "D-28", "D-29", "D-30",
+  "W4 <= W5",
+  "W5 <= 2M",
+  "2M <= 3M",
+  "3M <= 4M",
+  "4M <= 5M",
+  "5M <= 6M",
+  "6M <= 9M",
+  "9M <= 12M",
+  "12M <= 2Y",
+  "2Y <= 5Y",
+  ">5Y",
+];
 
 // ─── Reference Tables (Superadmin) ──────────────────────────
 

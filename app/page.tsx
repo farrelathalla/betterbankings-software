@@ -42,6 +42,7 @@ import {
   IRRBB_LABELS,
   LCR_LABELS,
   NSFR_LABELS,
+  ILAAP_LABELS,
 } from "./lib/api";
 
 /* ============================================================ */
@@ -90,7 +91,7 @@ function mapValue(
 /** Merge principal+interest maps from a ResultRow into a single value for a bucket label */
 function getBucketValue(
   row: ResultRow,
-  bucketType: "irrbb" | "lcr" | "nsfr",
+  bucketType: "irrbb" | "lcr" | "nsfr" | "ilaap",
   label: string,
   filterType: FilterType,
 ): number {
@@ -252,6 +253,48 @@ function buildColumns(
       getValue: (r) => r.remaining_days,
     },
     {
+      key: "account_number",
+      label: "Account Number",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.account_number,
+    },
+    {
+      key: "instrument_type",
+      label: "Instrument Type",
+      group: "Input",
+      type: "input",
+      getValue: (r) => mapValue(refMaps, "instrument_types", r.instrument_type),
+    },
+    {
+      key: "market_value",
+      label: "Market Value",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.market_value,
+    },
+    {
+      key: "asset_liability",
+      label: "Asset/Liability",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.asset_liability,
+    },
+    {
+      key: "margin",
+      label: "Margin",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.margin,
+    },
+    {
+      key: "revolving_flag",
+      label: "Revolving Flag",
+      group: "Input",
+      type: "input",
+      getValue: (r) => r.revolving_flag,
+    },
+    {
       key: "result_type",
       label: "Result Type",
       group: "Result Type",
@@ -284,7 +327,15 @@ function buildColumns(
     getValue: (r: ResultRow) => getBucketValue(r, "irrbb", label, filterType),
   }));
 
-  return [...inputCols, ...lcrCols, ...nsfrCols, ...irrbbCols];
+  const ilaapCols: ColDef[] = ILAAP_LABELS.map((label) => ({
+    key: `ilaap__${label}`,
+    label,
+    group: "CF ILAAP",
+    type: "result" as const,
+    getValue: (r: ResultRow) => getBucketValue(r, "ilaap", label, filterType),
+  }));
+
+  return [...inputCols, ...lcrCols, ...nsfrCols, ...irrbbCols, ...ilaapCols];
 }
 
 const INPUT_KEYS = [
@@ -306,6 +357,12 @@ const INPUT_KEYS = [
   "interest_payment_frequency",
   "day_count",
   "remaining_days",
+  "account_number",
+  "instrument_type",
+  "market_value",
+  "asset_liability",
+  "margin",
+  "revolving_flag",
   "result_type",
 ];
 
@@ -1619,7 +1676,7 @@ export default function Home() {
     if (!name) return;
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".csv";
+    input.accept = ".csv,.xlsx,.xls";
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
@@ -1658,7 +1715,7 @@ export default function Home() {
   const handleRefreshScenario = async (id: number) => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".csv";
+    input.accept = ".csv,.xlsx,.xls";
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
@@ -1764,13 +1821,14 @@ export default function Home() {
               Drop your file here or click to browse
             </div>
             <div className="upload-text-sub">
-              Supports <span>.csv</span> and <span>.txt</span> files — tab,
-              semicolon, or comma delimited
+              Supports <span>.csv</span>, <span>.txt</span>, and{" "}
+              <span>.xlsx</span> files — tab, semicolon, or comma delimited
+              (CSV/TXT) or Excel format (XLSX)
             </div>
             <input
               ref={fileInputRef}
               type="file"
-              accept=".txt,.csv,.tsv"
+              accept=".txt,.csv,.tsv,.xlsx,.xls"
               style={{ display: "none" }}
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -2154,7 +2212,7 @@ export default function Home() {
             <div className="empty-state-icon">📊</div>
             <h3>No data yet</h3>
             <p>
-              Upload a CSV/TXT file with your loan data, then click{" "}
+              Upload a CSV/TXT/XLSX file with your loan data, then click{" "}
               <strong>&quot;Process Cashflow&quot;</strong> to see the results.
             </p>
           </div>
