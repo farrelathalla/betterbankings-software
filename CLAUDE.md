@@ -6,7 +6,7 @@
 
 ## What This Project Is
 
-**betterbankings-software** is the Next.js frontend for the BetterBankings cashflow analysis platform. It provides a web UI for uploading loan CSV data, viewing computed cashflow results in paginated tables, pivoting/aggregating data by various dimensions, filtering, exporting to Excel, managing scenario behaviours, managing reference data (SuperAdmin), and saving/loading column presets.
+**betterbankings-software** is the Next.js frontend for the BetterBankings cashflow analysis platform. It provides a web UI for uploading loan CSV or XLSX data, viewing computed cashflow results in paginated tables (IRRBB, LCR, NSFR, ILAAP buckets), pivoting/aggregating data by various dimensions, filtering, exporting to Excel, managing scenario behaviours (CSV or XLSX), managing reference data (SuperAdmin), and saving/loading column presets.
 
 Backend API is at `https://103.103.22.207:8002` (hardcoded in `app/lib/api.ts`).
 
@@ -80,10 +80,10 @@ The main application lives in **`app/page.tsx`** (~2600 lines, `"use client"`). 
 ### State & Views
 
 - **Login gate** — renders `<LoginPage>` if not authenticated, otherwise the full dashboard
-- **Upload** — CSV file upload → polls `GET /api/upload/status/:id` until completed
+- **Upload** — CSV or XLSX file upload → polls `GET /api/upload/status/:id` until completed
 - **Active Upload** — once completed, loads results from the backend
 - **Results Table** — paginated table with configurable visible columns, sorting, filtering
-- **Column Selector** — grouped toggle panel (Input Columns, LCR, NSFR, IRRBB bucket columns)
+- **Column Selector** — grouped toggle panel (Input Columns, LCR, NSFR, IRRBB, ILAAP bucket columns)
 - **Filter Panel** — per-column filter dropdowns with AND logic
 - **Pivot Table** — dynamic aggregation by any combination of pivot keys
 - **Summary Panel** — totals, averages, bucket sums
@@ -92,9 +92,9 @@ The main application lives in **`app/page.tsx`** (~2600 lines, `"use client"`). 
 
 ### Key Constants
 
-- `INPUT_KEYS` — 21 input column identifiers
+- `INPUT_KEYS` — 27 input column identifiers (includes account_number, instrument_type, market_value, asset_liability, margin, revolving_flag)
 - `PIVOTABLE_KEYS` — 12 columns that can be used as pivot group-by keys
-- `IRRBB_LABELS`, `LCR_LABELS`, `NSFR_LABELS` — bucket label arrays (from `api.ts`)
+- `IRRBB_LABELS`, `LCR_LABELS`, `NSFR_LABELS`, `ILAAP_LABELS` — bucket label arrays (from `api.ts`)
 
 ### Filter Type
 
@@ -138,7 +138,7 @@ The main application lives in **`app/page.tsx`** (~2600 lines, `"use client"`). 
 
 ### Type Definitions
 
-- `ResultRow` — matches backend `models.ResultRow`, includes all loan input fields + 6 bucket maps
+- `ResultRow` — matches backend `models.ResultRow`, includes all loan input fields + 8 bucket maps (IRRBB/LCR/NSFR/ILAAP × principal/interest) + account_number, instrument_type, market_value, asset_liability, margin, revolving_flag
 - `PaginatedResponse` — `{ data: ResultRow[], total, total_pages }`
 - `SummaryResponse` — `{ total_count, total_outstanding, avg_interest_rate, currencies, bucket_totals, column_sums }`
 - `ReferenceMaps` — `Record<string, ReferenceItem[]>` — all reference tables in one object
@@ -187,7 +187,7 @@ Reference tables: `product_types`, `segments`, `methods`, `day_counts`, `currenc
 
 ### `/` (Main Page — `app/page.tsx`)
 
-The entire dashboard — upload, results, pivot, behaviours, presets, filters, column selector. All in one 2600-line client component.
+The entire dashboard — upload (CSV/XLSX), results, pivot, behaviours (CSV/XLSX scenarios), presets, filters, column selector. All in one ~2700-line client component.
 
 ### `/admin` (`app/admin/page.tsx`)
 
@@ -205,7 +205,7 @@ Upload history list with delete action.
 
 ## Common Pitfalls
 
-- **`page.tsx` is 2600+ lines** — the main application is a single monolithic client component. All state lives in React hooks at the top. Be careful with state dependencies.
+- **`page.tsx` is 2700+ lines** — the main application is a single monolithic client component. All state lives in React hooks at the top. Be careful with state dependencies.
 - **Python `.py` files in root** — `bucket.py`, `calculator.py`, `extractor.py`, `model.py` are reference files from `installment_software`, NOT used by the frontend at runtime.
 - **Tailwind v4** — CSS-first config, no JS config file. Custom colors use `@theme` in `globals.css`.
 - **API_BASE is hardcoded** — `https://103.103.22.207:8002` in `api.ts`. Change this for different environments.
@@ -213,3 +213,5 @@ Upload history list with delete action.
 - **`behaviour_id` handling** — `"null"`, `"base"`, or empty all mean "show base results (no scenario)". A numeric string means "show results for that scenario behaviour".
 - **Bucket label strings must match exactly** — the frontend uses the exact same bucket label strings as the backend (e.g., `"≤ 1 M"`, `"CF <= 30D"`). Any mismatch will result in missing data.
 - **No SSR** — the main page is `"use client"` with localStorage auth, so it cannot be server-rendered.
+- **XLSX upload support** — file accept attributes include `.xlsx,.xls` for both data input and scenario uploads. The backend handles format detection by file extension.
+- **ILAAP columns** — 41 ILAAP bucket columns are available in the column selector under "CF ILAAP" group. Interest is always 0 for ILAAP buckets.
