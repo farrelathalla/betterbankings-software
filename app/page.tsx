@@ -9,6 +9,7 @@ import React, {
 } from "react";
 import ReactDOM from "react-dom";
 import LoginPage from "./components/LoginPage";
+import { useModal } from "./components/Modal";
 import {
   isLoggedIn,
   logout,
@@ -27,6 +28,9 @@ import {
   updateBehaviour,
   reprocessUpload,
   loadAllReferenceMaps,
+  getMasterDataSchema,
+  downloadTemplate,
+  MasterDataSchema,
   listPresets,
   createPreset,
   updatePreset as apiUpdatePreset,
@@ -39,6 +43,7 @@ import {
   Behaviour,
   PresetConfig,
   ReferenceMaps,
+  DetailedError,
   IRRBB_LABELS,
   LCR_LABELS,
   NSFR_LABELS,
@@ -84,8 +89,47 @@ function mapValue(
   if (rawValue == null || rawValue === "") return "-";
   const key = String(rawValue);
   const map = refMaps[table];
-  if (map && map[key]) return map[key];
-  return key;
+  if (!map) return key;
+  if (map[key]) return map[key];
+  // Some columns (method, day count) store the resolved name rather than the
+  // ID — show the master data's own spelling of it.
+  const byName = Object.values(map).find(
+    (name) => name.toLowerCase() === key.toLowerCase(),
+  );
+  return byName ?? key;
+}
+
+/**
+ * Which master data table backs each coded column. Everything that renders a
+ * raw column value — the results table, the pivot rows, the filter dropdowns,
+ * the preset editor — goes through this so a Product Type reads "Loan"
+ * instead of "1".
+ */
+const REF_TABLE_BY_KEY: Record<string, string> = {
+  ccy: "currencies",
+  product_type: "product_types",
+  segment: "segments",
+  method: "methods",
+  day_count: "day_counts",
+  instrument_type: "instrument_types",
+  transactional_or_non: "transactional_types",
+  installment_frequency: "installment_frequencies",
+  interest_payment_frequency: "installment_frequencies",
+  insured_or_uninsured: "insured_types",
+  asset_liability: "asset_liabilities",
+  revolving_flag: "revolving_flags",
+};
+
+/** Renders one raw column value the way the user should read it. */
+function displayValue(
+  refMaps: ReferenceMaps,
+  columnKey: string,
+  raw: string,
+): string {
+  if (raw === "" || raw == null) return "(blank)";
+  const table = REF_TABLE_BY_KEY[columnKey];
+  if (!table) return raw;
+  return mapValue(refMaps, table, raw);
 }
 
 /** Merge principal+interest maps from a ResultRow into a single value for a bucket label */
@@ -207,7 +251,7 @@ function buildColumns(
       label: "Insured/Uninsured",
       group: "Input",
       type: "input",
-      getValue: (r) => r.insured_or_uninsured,
+      getValue: (r) => mapValue(refMaps, "insured_types", r.insured_or_uninsured),
     },
     {
       key: "transactional_or_non",
@@ -278,7 +322,7 @@ function buildColumns(
       label: "Asset/Liability",
       group: "Input",
       type: "input",
-      getValue: (r) => r.asset_liability,
+      getValue: (r) => mapValue(refMaps, "asset_liabilities", r.asset_liability),
     },
     {
       key: "margin",
@@ -292,7 +336,7 @@ function buildColumns(
       label: "Revolving Flag",
       group: "Input",
       type: "input",
-      getValue: (r) => r.revolving_flag,
+      getValue: (r) => mapValue(refMaps, "revolving_flags", r.revolving_flag),
     },
     {
       key: "result_type",
@@ -464,6 +508,7 @@ function FilterDropdown({
   isNumeric,
   allValues,
   filterState,
+  refMaps,
   onApply,
   onClose,
   posTop,
@@ -474,6 +519,7 @@ function FilterDropdown({
   isNumeric: boolean;
   allValues: string[];
   filterState: ColumnFilterState;
+  refMaps: ReferenceMaps;
   onApply: (key: string, state: ColumnFilterState) => void;
   onClose: () => void;
   posTop: number;
@@ -502,9 +548,16 @@ function FilterDropdown({
     return () => document.removeEventListener("mousedown", handler);
   }, [onClose]);
 
-  const filteredValues = allValues.filter((v) =>
-    v.toLowerCase().includes(localState.searchText.toLowerCase()),
-  );
+  // Search matches the label the user actually sees ("Loan"), as well as the
+  // underlying code ("1") for anyone who knows it.
+  const filteredValues = allValues.filter((v) => {
+    const q = localState.searchText.toLowerCase();
+    if (!q) return true;
+    return (
+      v.toLowerCase().includes(q) ||
+      displayValue(refMaps, colKey, v).toLowerCase().includes(q)
+    );
+  });
 
   const allSelected = filteredValues.every((v) =>
     localState.selectedValues.has(v),
@@ -643,7 +696,7 @@ function FilterDropdown({
               checked={localState.selectedValues.has(val)}
               onChange={() => toggleValue(val)}
             />
-            <span>{val || "(blank)"}</span>
+            <span>{displayValue(refMaps, colKey, val)}</span>
           </label>
         ))}
         {filteredValues.length === 0 && (
@@ -671,6 +724,7 @@ function PresetView({
   allColumns,
   results,
   distinctValues,
+  refMaps,
   summary,
   uploadId,
   filterType,
@@ -680,6 +734,7 @@ function PresetView({
   allColumns: ColDef[];
   results: ResultRow[];
   distinctValues: Record<string, string[]>;
+  refMaps: ReferenceMaps;
   summary: SummaryResponse | null;
   uploadId: string;
   filterType: string;
@@ -794,6 +849,7 @@ function PresetView({
             pivotRows={pivotRows}
             visibleColumns={presetVisibleCols}
             allColumns={allColumns}
+            refMaps={refMaps}
             onDrillDown={() => {}}
           />
         )
@@ -805,6 +861,7 @@ function PresetView({
           columnFilters={{}}
           onApplyFilter={() => {}}
           distinctValues={distinctValues}
+          refMaps={refMaps}
           summary={summary}
         />
       )}
@@ -931,6 +988,99 @@ function ColumnSelector({
 }
 
 /* ============================================================ */
+/*  MASTER DATA CHEAT SHEET                                     */
+/*  Shows what each code in the upload file means, so a new     */
+/*  spreadsheet can be filled in without guessing.              */
+/* ============================================================ */
+function MasterDataPanel({
+  onError,
+}: {
+  onError: (title: string, message: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [schema, setSchema] = useState<MasterDataSchema | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+
+  useEffect(() => {
+    if (!open || schema || loading) return;
+    setLoading(true);
+    getMasterDataSchema()
+      .then(setSchema)
+      .catch((e: Error) => onError("Could not load the code list", e.message))
+      .finally(() => setLoading(false));
+  }, [open, schema, loading, onError]);
+
+  const handleTemplate = async () => {
+    setDownloading(true);
+    try {
+      await downloadTemplate();
+    } catch (e) {
+      onError("Could not build the template", (e as Error).message);
+    }
+    setDownloading(false);
+  };
+
+  const codedColumns = schema?.columns.filter(
+    (c) => c.allowed_values.length > 0,
+  );
+
+  return (
+    <div className="md-panel">
+      <div className="md-panel-head">
+        <button className="md-panel-toggle" onClick={() => setOpen(!open)}>
+          <span className="md-panel-caret">{open ? "▾" : "▸"}</span>
+          What do the numbers in the file mean?
+        </button>
+        <button
+          className="md-panel-template"
+          onClick={handleTemplate}
+          disabled={downloading}
+        >
+          {downloading ? "Building…" : "⬇ Excel template"}
+        </button>
+      </div>
+
+      {open && (
+        <div className="md-panel-body">
+          {loading && <div className="md-panel-empty">Loading…</div>}
+
+          {schema && (
+            <>
+              <p className="md-panel-note">
+                Coded columns hold a <b>number</b>, not a word — write{" "}
+                <code>1</code> in Product Type, not <code>Loan</code>. A value
+                outside these lists stops the whole upload and is reported per
+                row.
+              </p>
+
+              <div className="md-panel-grid">
+                {codedColumns?.map((col) => (
+                  <div key={col.name} className="md-panel-col">
+                    <div className="md-panel-col-name">
+                      <code>{col.name}</code>
+                      {col.required && <span className="md-req">required</span>}
+                    </div>
+                    <div className="md-panel-codes">
+                      {col.allowed_values.map((v) => (
+                        <span key={v.id} className="md-code">
+                          <b>{v.id}</b>
+                          {v.name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================ */
 /*  FILTERABLE HEADER CELL                                      */
 /* ============================================================ */
 function FilterableHeader({
@@ -938,12 +1088,14 @@ function FilterableHeader({
   className,
   allValues,
   columnFilters,
+  refMaps,
   onApplyFilter,
 }: {
   col: ColDef;
   className: string;
   allValues: string[];
   columnFilters: Record<string, ColumnFilterState>;
+  refMaps: ReferenceMaps;
   onApplyFilter: (key: string, state: ColumnFilterState) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -989,6 +1141,7 @@ function FilterableHeader({
             isNumeric={isNum}
             allValues={allValues}
             filterState={columnFilters[col.key] || getDefaultFilterState()}
+            refMaps={refMaps}
             onApply={onApplyFilter}
             onClose={() => setOpen(false)}
             posTop={dropdownPos.top}
@@ -1020,6 +1173,7 @@ function ResultTable({
   columnFilters,
   onApplyFilter,
   distinctValues,
+  refMaps,
   summary,
 }: {
   data: ResultRow[];
@@ -1028,6 +1182,7 @@ function ResultTable({
   columnFilters: Record<string, ColumnFilterState>;
   onApplyFilter: (key: string, state: ColumnFilterState) => void;
   distinctValues: Record<string, string[]>;
+  refMaps: ReferenceMaps;
   summary?: SummaryResponse | null;
 }) {
   const visibleCols = allColumns.filter((c) => visibleColumns.has(c.key));
@@ -1044,6 +1199,7 @@ function ResultTable({
                 className={getGroupBorderClass(col, visibleCols, i)}
                 allValues={distinctValues[col.key] || []}
                 columnFilters={columnFilters}
+                refMaps={refMaps}
                 onApplyFilter={onApplyFilter}
               />
             ))}
@@ -1120,12 +1276,14 @@ function PivotTableView({
   pivotRows,
   visibleColumns,
   allColumns,
+  refMaps,
   onDrillDown,
 }: {
   pivotData: APIPivotGroup[];
   pivotRows: string[];
   visibleColumns: Set<string>;
   allColumns: ColDef[];
+  refMaps: ReferenceMaps;
   onDrillDown: (filters: Record<string, string>) => void;
 }) {
   const visibleCols = allColumns.filter((c) => visibleColumns.has(c.key));
@@ -1167,7 +1325,7 @@ function PivotTableView({
                     onClick={() => onDrillDown(group.keys)}
                     title="Click to drill down"
                   >
-                    {group.keys[pc.key] || "-"}
+                    {displayValue(refMaps, pc.key, group.keys[pc.key] ?? "")}
                   </button>
                 </td>
               ))}
@@ -1237,6 +1395,13 @@ export default function Home() {
 
   // Reference maps
   const [refMaps, setRefMaps] = useState<ReferenceMaps>({});
+  const {
+    showConfirm,
+    showError,
+    showSuccess,
+    showPrompt,
+    showValidationErrors,
+  } = useModal();
 
   // Column visibility
   const allColumns = useMemo(
@@ -1450,6 +1615,38 @@ export default function Home() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
 
+  /**
+   * Shows the rejected rows in a modal. The inline error box stays as well, so
+   * the list is still reachable after the modal is dismissed.
+   */
+  const reportValidationErrors = useCallback(
+    (errors: ValidationError[]) => {
+      showValidationErrors(errors, {
+        fileName: file?.name,
+        hint: (
+          <>
+            Coded columns only accept the codes defined in the master data — a
+            Product Type cell holds <b>1</b>, not <b>Loan</b>. Each message below
+            lists the codes that column accepts.
+            {isSuperAdmin() ? (
+              <>
+                {" "}
+                The full list, and a ready-made Excel template, are on the{" "}
+                <a href="/admin" className="bb-modal-link">
+                  Master Data
+                </a>{" "}
+                page.
+              </>
+            ) : (
+              " Ask a SuperAdmin to add a code that is genuinely missing."
+            )}
+          </>
+        ),
+      });
+    },
+    [file, showValidationErrors],
+  );
+
   const handleProcess = useCallback(async () => {
     if (!file) return;
     setError(null);
@@ -1464,6 +1661,7 @@ export default function Home() {
         setValidationErrors(uploadRes.errors);
         setProcessing(false);
         setProcessProgress("");
+        reportValidationErrors(uploadRes.errors);
         return;
       }
 
@@ -1492,16 +1690,20 @@ export default function Home() {
       await loadResults();
       await fetchScenarios();
     } catch (err: unknown) {
-      const error = err as Error & { validationErrors?: ValidationError[] };
+      const error = err as DetailedError & {
+        validationErrors?: ValidationError[];
+      };
       if (error.validationErrors) {
         setValidationErrors(error.validationErrors);
+        reportValidationErrors(error.validationErrors);
       } else {
         setError(error.message);
+        showError("Upload failed", error.message, error.details);
       }
       setProcessing(false);
       setProcessProgress("");
     }
-  }, [file, filterType]);
+  }, [file, filterType, reportValidationErrors, showError]);
 
   const handleLoadMore = useCallback(async () => {
     if (!uploadId || loadingMore || currentPage >= totalPages) return;
@@ -1601,8 +1803,12 @@ export default function Home() {
 
       if (fs.selectedValues.size > 0) {
         data = data.filter((row) => {
-          const val = String(col.getValue(row));
-          return fs.selectedValues.has(val);
+          // The dropdown lists the master data names but stores the raw codes
+          // the server reported, so a coded column has to match on either.
+          if (fs.selectedValues.has(String(col.getValue(row)))) return true;
+          if (!REF_TABLE_BY_KEY[key]) return false;
+          const raw = (row as unknown as Record<string, unknown>)[key];
+          return fs.selectedValues.has(raw == null ? "" : String(raw));
         });
       }
 
@@ -1672,7 +1878,14 @@ export default function Home() {
 
   // Scenario Handlers
   const handleAddScenario = async () => {
-    const name = prompt("Enter Scenario Name:");
+    const name = await showPrompt({
+      title: "Add a scenario",
+      message:
+        "Pick a name, then choose the scenario file (2-section CSV, or XLSX with a Bucket and a Cashflow Assumption sheet).",
+      label: "Scenario name",
+      placeholder: "e.g. Covid Behaviour",
+      confirmLabel: "Choose file…",
+    });
     if (!name) return;
     const input = document.createElement("input");
     input.type = "file";
@@ -1686,9 +1899,13 @@ export default function Home() {
         await reprocessUpload(uploadId!);
         await fetchScenarios();
         setActiveBehaviourId(res.id);
-        alert("Scenario added and reprocessed.");
-      } catch (err: any) {
-        alert(err.message);
+        showSuccess(
+          "Scenario added",
+          `"${name}" was imported and the cashflows were recalculated.`,
+        );
+      } catch (err) {
+        const e = err as DetailedError;
+        showError("Could not add the scenario", e.message, e.details);
       } finally {
         setRefreshing(false);
       }
@@ -1699,14 +1916,20 @@ export default function Home() {
   const handleEditScenario = async (id: number) => {
     const sc = scenarios.find((s) => s.id === id);
     if (!sc) return;
-    const newName = prompt("Rename Scenario:", sc.name);
+    const newName = await showPrompt({
+      title: "Rename scenario",
+      label: "Scenario name",
+      defaultValue: sc.name,
+      confirmLabel: "Rename",
+    });
     if (newName === null) return;
     try {
       setRefreshing(true);
       await updateBehaviour(id, newName);
       await fetchScenarios();
-    } catch (err: any) {
-      alert(err.message);
+    } catch (err) {
+      const e = err as DetailedError;
+      showError("Could not rename the scenario", e.message, e.details);
     } finally {
       setRefreshing(false);
     }
@@ -1723,10 +1946,14 @@ export default function Home() {
         setRefreshing(true);
         await updateBehaviour(id, undefined, file);
         await reprocessUpload(uploadId!);
-        alert("Scenario file updated and reprocessed.");
+        showSuccess(
+          "Scenario updated",
+          "The new file was imported and the cashflows were recalculated.",
+        );
         loadResults();
-      } catch (err: any) {
-        alert(err.message);
+      } catch (err) {
+        const e = err as DetailedError;
+        showError("Could not update the scenario", e.message, e.details);
       } finally {
         setRefreshing(false);
       }
@@ -1735,14 +1962,23 @@ export default function Home() {
   };
 
   const handleDeleteScenario = async (id: number) => {
-    if (!confirm("Are you sure you want to delete this scenario?")) return;
+    const scenario = scenarios.find((s) => s.id === id);
+    const ok = await showConfirm({
+      title: `Delete scenario "${scenario?.name || id}"?`,
+      message:
+        "Its results are removed from this upload. The base (contractual) results are not affected.",
+      tone: "danger",
+      confirmLabel: "Delete scenario",
+    });
+    if (!ok) return;
     try {
       setRefreshing(true);
       await deleteBehaviour(id);
       if (activeBehaviourId === id) setActiveBehaviourId(null);
       await fetchScenarios();
-    } catch (err: any) {
-      alert(err.message);
+    } catch (err) {
+      const e = err as DetailedError;
+      showError("Could not delete the scenario", e.message, e.details);
     } finally {
       setRefreshing(false);
     }
@@ -1851,6 +2087,8 @@ export default function Home() {
               </button>
             </div>
           )}
+
+          <MasterDataPanel onError={showError} />
         </div>
 
         {/* VALIDATION ERRORS */}
@@ -1858,19 +2096,26 @@ export default function Home() {
           <div className="error-box fade-in">
             <span className="error-icon">⚠️</span>
             <div className="error-text">
-              <strong>CSV Validation Failed</strong>
+              <strong>
+                File rejected — {validationErrors.length} value
+                {validationErrors.length === 1 ? "" : "s"} did not match the
+                master data. Nothing was imported.
+              </strong>
               <div className="validation-errors-list">
-                {validationErrors.slice(0, 20).map((ve, i) => (
+                {validationErrors.slice(0, 8).map((ve, i) => (
                   <div key={i} className="validation-error-item">
-                    Row {ve.row}, Column &quot;{ve.column}&quot;: {ve.message}
+                    {ve.row > 0 ? `Row ${ve.row}` : "File"}
+                    {ve.column ? ` · ${ve.column}` : ""}: {ve.message}
                   </div>
                 ))}
-                {validationErrors.length > 20 && (
-                  <div className="validation-error-item">
-                    ...and {validationErrors.length - 20} more errors
-                  </div>
-                )}
               </div>
+              <button
+                className="btn-validation-details"
+                onClick={() => reportValidationErrors(validationErrors)}
+              >
+                See all {validationErrors.length} problem
+                {validationErrors.length === 1 ? "" : "s"}
+              </button>
             </div>
           </div>
         )}
@@ -2088,7 +2333,14 @@ export default function Home() {
                     <button
                       className="preset-item-btn delete"
                       onClick={async () => {
-                        if (!confirm(`Delete preset "${p.name}"?`)) return;
+                        const ok = await showConfirm({
+                          title: `Delete preset "${p.name}"?`,
+                          message:
+                            "The saved column selection, pivot rows and value filters are removed.",
+                          tone: "danger",
+                          confirmLabel: "Delete preset",
+                        });
+                        if (!ok) return;
                         try {
                           await apiDeletePreset(p.id!);
                           setPresets((prev) =>
@@ -2173,6 +2425,7 @@ export default function Home() {
                     pivotRows={pivotRows}
                     visibleColumns={visibleColumns}
                     allColumns={allColumns}
+                    refMaps={refMaps}
                     onDrillDown={handleDrillDown}
                   />
                 )
@@ -2185,6 +2438,7 @@ export default function Home() {
                     columnFilters={columnFilters}
                     onApplyFilter={handleApplyFilter}
                     distinctValues={distinctValues}
+                    refMaps={refMaps}
                     summary={summary}
                   />
                   {currentPage < totalPages && (
@@ -2230,6 +2484,7 @@ export default function Home() {
                   allColumns={allColumns}
                   results={results}
                   distinctValues={distinctValues}
+                  refMaps={refMaps}
                   summary={summary}
                   uploadId={uploadId || ""}
                   filterType={filterType}
@@ -2508,7 +2763,7 @@ export default function Home() {
                               }}
                               style={{ position: "relative" }}
                             >
-                              {val || "(empty)"}
+                              {displayValue(refMaps, key, val)}
                               {isIncluded && orderIdx >= 0 && (
                                 <span
                                   style={{
@@ -2590,7 +2845,7 @@ export default function Home() {
                                     }}
                                   >
                                     {idx >= 0 ? `${idx + 1}. ` : ""}
-                                    {val || "(empty)"}
+                                    {displayValue(refMaps, key, val)}
                                   </button>
                                 );
                               })}
@@ -2649,7 +2904,8 @@ export default function Home() {
                       await fetchPresets();
                       setPresetModalOpen(false);
                     } catch (err) {
-                      alert(
+                      showError(
+                        "Could not save the preset",
                         err instanceof Error
                           ? err.message
                           : "Failed to save preset",

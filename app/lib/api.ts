@@ -481,7 +481,90 @@ export async function deleteReference(
     method: "DELETE",
     headers: authHeaders(),
   });
-  if (!res.ok) throw new Error("Failed to delete");
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Failed to delete");
+  }
+}
+
+// ─── Master Data Guide ──────────────────────────────────────
+
+/** One column of the upload file, as described by the backend catalog. */
+export interface MasterDataColumn {
+  name: string;
+  required: boolean;
+  kind: "code" | "date" | "number" | "percent" | "text" | "boolean";
+  ref_table: string;
+  format: string;
+  example: string;
+  description: string;
+  nullable: boolean;
+  aliases: string[] | null;
+  allowed_values: ReferenceItem[];
+  ref_label: string;
+}
+
+/** One master data table plus the columns that read from it. */
+export interface MasterDataTable {
+  key: string;
+  label: string;
+  description: string;
+  used_by: string[];
+  items: ReferenceItem[];
+}
+
+export interface MasterDataSchema {
+  columns: MasterDataColumn[];
+  tables: MasterDataTable[];
+  supported_methods: string[];
+  supported_day_counts: string[];
+}
+
+/** The upload contract: which columns exist and which codes each accepts. */
+export async function getMasterDataSchema(): Promise<MasterDataSchema> {
+  const res = await fetch(`${API_BASE}/api/master-data/schema`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to load the master data guide");
+  return res.json();
+}
+
+/** Downloads a starter .xlsx pre-filled with headers, hints and code lists. */
+export async function downloadTemplate(): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/master-data/template`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to build the Excel template");
+
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition");
+  let filename = "betterbankings_upload_template.xlsx";
+  if (disposition) {
+    const match = disposition.match(/filename="?(.+?)"?$/);
+    if (match) filename = match[1];
+  }
+
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/** An Error carrying the backend's per-line explanations, for the modal to list. */
+export interface DetailedError extends Error {
+  details?: string[];
+}
+
+function detailedError(
+  data: { error?: string; details?: unknown },
+  fallback: string,
+): DetailedError {
+  const err: DetailedError = new Error(data.error || fallback);
+  if (Array.isArray(data.details) && data.details.length > 0) {
+    err.details = data.details.map(String);
+  }
+  return err;
 }
 
 // ─── Behaviours ─────────────────────────────────────────────
@@ -528,15 +611,7 @@ export async function uploadBehaviour(
   });
   if (!res.ok) {
     const data = await res.json();
-    const mainError = data.error || "Failed to upload behaviour";
-    if (
-      data.details &&
-      Array.isArray(data.details) &&
-      data.details.length > 0
-    ) {
-      throw new Error(`${mainError}:\n\n${data.details.join("\n")}`);
-    }
-    throw new Error(mainError);
+    throw detailedError(data, "Failed to upload behaviour");
   }
   return res.json();
 }
@@ -575,15 +650,7 @@ export async function updateBehaviour(
   });
   if (!res.ok) {
     const data = await res.json();
-    const mainError = data.error || "Failed to update behaviour";
-    if (
-      data.details &&
-      Array.isArray(data.details) &&
-      data.details.length > 0
-    ) {
-      throw new Error(`${mainError}:\n\n${data.details.join("\n")}`);
-    }
-    throw new Error(mainError);
+    throw detailedError(data, "Failed to update behaviour");
   }
 }
 

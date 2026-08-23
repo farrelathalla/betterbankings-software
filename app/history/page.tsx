@@ -12,8 +12,10 @@ import {
   HistoryItem,
 } from "../lib/api";
 import LoginPage from "../components/LoginPage";
+import { useModal } from "../components/Modal";
 
 export default function HistoryPage() {
+  const { showConfirm, showError } = useModal();
   const [authenticated, setAuthenticated] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -42,25 +44,41 @@ export default function HistoryPage() {
     setLoading(false);
   };
 
-  const handleDelete = useCallback(async (id: string) => {
-    if (!confirm("Are you sure you want to delete this upload?")) return;
-    setDeletingId(id);
-    try {
-      await deleteUpload(id);
-      setHistory((prev) => prev.filter((h) => h.id !== id));
-    } catch (err) {
-      setError((err as Error).message);
-    }
-    setDeletingId(null);
-  }, []);
+  const handleDelete = useCallback(
+    async (id: string) => {
+      const item = history.find((h) => h.id === id);
+      const ok = await showConfirm({
+        title: `Delete "${item?.filename || id}"?`,
+        message:
+          "The uploaded file, its rows, its results and any scenarios attached to it are removed. This cannot be undone.",
+        tone: "danger",
+        confirmLabel: "Delete upload",
+      });
+      if (!ok) return;
+      setDeletingId(id);
+      try {
+        await deleteUpload(id);
+        setHistory((prev) => prev.filter((h) => h.id !== id));
+      } catch (err) {
+        setError((err as Error).message);
+        showError("Could not delete the upload", (err as Error).message);
+      }
+      setDeletingId(null);
+    },
+    [history, showConfirm, showError],
+  );
 
-  const handleExport = useCallback(async (id: string) => {
-    try {
-      await downloadExport(id, "both");
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }, []);
+  const handleExport = useCallback(
+    async (id: string) => {
+      try {
+        await downloadExport(id, "both");
+      } catch (err) {
+        setError((err as Error).message);
+        showError("Export failed", (err as Error).message);
+      }
+    },
+    [showError],
+  );
 
   const handleView = useCallback((id: string) => {
     // Navigate to main page with upload_id — we'll store it and redirect

@@ -22,7 +22,11 @@ import {
   updateBehaviour,
   deleteBehaviour,
   reprocessUpload,
+  loadAllReferenceMaps,
+  ReferenceMaps,
+  DetailedError,
 } from "../lib/api";
+import { useModal } from "../components/Modal";
 
 /* ============================================================ */
 /*  TYPES                                                       */
@@ -48,6 +52,28 @@ function fmtPct(n: number): string {
   return (n * 100).toFixed(2) + "%";
 }
 
+/**
+ * Coded columns are stored as IDs. Everything the user reads goes through the
+ * master data maps, so a Product Type shows as "Loan" rather than "1" — here
+ * and in the column filters, which derive their options from getValue().
+ */
+function mapValue(
+  refMaps: ReferenceMaps,
+  table: string,
+  rawValue: string | number | null | undefined,
+): string {
+  if (rawValue == null || rawValue === "") return "-";
+  const key = String(rawValue);
+  const map = refMaps[table];
+  if (!map) return key;
+  if (map[key]) return map[key];
+  // method / day count store the resolved name, not the ID.
+  const byName = Object.values(map).find(
+    (name) => name.toLowerCase() === key.toLowerCase(),
+  );
+  return byName ?? key;
+}
+
 function getBucketValue(
   row: ResultRow,
   bucketType: "irrbb" | "lcr" | "nsfr",
@@ -65,7 +91,10 @@ function getBucketValue(
   return p + i;
 }
 
-function buildColumns(filterType: FilterType): ColDef[] {
+function buildColumns(
+  filterType: FilterType,
+  refMaps: ReferenceMaps,
+): ColDef[] {
   const inputCols: ColDef[] = [
     {
       key: "reporting_date",
@@ -79,7 +108,12 @@ function buildColumns(filterType: FilterType): ColDef[] {
       group: "Input",
       getValue: (r) => r.account_id,
     },
-    { key: "ccy", label: "CCY", group: "Input", getValue: (r) => r.ccy },
+    {
+      key: "ccy",
+      label: "CCY",
+      group: "Input",
+      getValue: (r) => mapValue(refMaps, "currencies", r.ccy),
+    },
     {
       key: "outstanding",
       label: "Outstanding",
@@ -109,19 +143,25 @@ function buildColumns(filterType: FilterType): ColDef[] {
       label: "Installment Freq.",
       group: "Input",
       getValue: (r) =>
-        r.installment_frequency != null ? String(r.installment_frequency) : "-",
+        r.installment_frequency != null
+          ? mapValue(
+              refMaps,
+              "installment_frequencies",
+              r.installment_frequency,
+            )
+          : "-",
     },
     {
       key: "product_type",
       label: "Product Type",
       group: "Input",
-      getValue: (r) => r.product_type,
+      getValue: (r) => mapValue(refMaps, "product_types", r.product_type),
     },
     {
       key: "segment",
       label: "Segment",
       group: "Input",
-      getValue: (r) => r.segment,
+      getValue: (r) => mapValue(refMaps, "segments", r.segment),
     },
     {
       key: "daerah",
@@ -139,19 +179,21 @@ function buildColumns(filterType: FilterType): ColDef[] {
       key: "insured_or_uninsured",
       label: "Insured/Uninsured",
       group: "Input",
-      getValue: (r) => r.insured_or_uninsured,
+      getValue: (r) =>
+        mapValue(refMaps, "insured_types", r.insured_or_uninsured),
     },
     {
       key: "transactional_or_non",
       label: "Transactional/Non",
       group: "Input",
-      getValue: (r) => r.transactional_or_non,
+      getValue: (r) =>
+        mapValue(refMaps, "transactional_types", r.transactional_or_non),
     },
     {
       key: "method",
       label: "Method",
       group: "Input",
-      getValue: (r) => r.method,
+      getValue: (r) => mapValue(refMaps, "methods", r.method),
     },
     {
       key: "interest_payment_frequency",
@@ -159,14 +201,18 @@ function buildColumns(filterType: FilterType): ColDef[] {
       group: "Input",
       getValue: (r) =>
         r.interest_payment_frequency != null
-          ? String(r.interest_payment_frequency)
+          ? mapValue(
+              refMaps,
+              "installment_frequencies",
+              r.interest_payment_frequency,
+            )
           : "-",
     },
     {
       key: "day_count",
       label: "Day Count",
       group: "Input",
-      getValue: (r) => r.day_count,
+      getValue: (r) => mapValue(refMaps, "day_counts", r.day_count),
     },
   ];
 
@@ -505,6 +551,8 @@ function FilterableHeader({
 /* ============================================================ */
 function DrilldownContent() {
   const searchParams = useSearchParams();
+  const { showConfirm, showError, showSuccess, showPrompt } = useModal();
+  const [refMaps, setRefMaps] = useState<ReferenceMaps>({});
   const uploadId = searchParams.get("upload_id") || "";
   const filterType = (searchParams.get("filter_type") || "both") as FilterType;
   const filtersRaw = searchParams.get("filters") || "{}";
@@ -523,11 +571,14 @@ function DrilldownContent() {
       const arr = JSON.parse(columnsRaw);
       return new Set(arr as string[]);
     } catch {
-      return new Set(buildColumns("both").map((c) => c.key));
+      return new Set(buildColumns("both", refMaps).map((c) => c.key));
     }
-  }, [columnsRaw]);
+  }, [columnsRaw, refMaps]);
 
-  const allColumns = useMemo(() => buildColumns(filterType), [filterType]);
+  const allColumns = useMemo(
+    () => buildColumns(filterType, refMaps),
+    [filterType, refMaps],
+  );
 
   const [data, setData] = useState<ResultRow[]>([]);
   const [totalRows, setTotalRows] = useState(0);
@@ -589,6 +640,14 @@ function DrilldownContent() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Master data maps — the codes stored in the rows are shown as their names.
+  useEffect(() => {
+    if (!isLoggedIn()) return;
+    loadAllReferenceMaps()
+      .then(setRefMaps)
+      .catch(() => setRefMaps({}));
+  }, []);
 
   const handleLoadMore = useCallback(async () => {
     if (!uploadId || loadingMore || currentPage >= totalPages) return;
@@ -709,7 +768,14 @@ function DrilldownContent() {
 
   // Scenario Handlers
   const handleAddScenario = async () => {
-    const name = prompt("Enter Scenario Name:");
+    const name = await showPrompt({
+      title: "Add a scenario",
+      message:
+        "Pick a name, then choose the scenario file (2-section CSV, or XLSX with a Bucket and a Cashflow Assumption sheet).",
+      label: "Scenario name",
+      placeholder: "e.g. Covid Behaviour",
+      confirmLabel: "Choose file…",
+    });
     if (!name) return;
 
     const input = document.createElement("input");
@@ -725,9 +791,13 @@ function DrilldownContent() {
         await reprocessUpload(uploadId); // Trigger reprocess for all
         await fetchScenarios();
         setActiveBehaviourId(res.id);
-        alert("Scenario added and reprocessed.");
-      } catch (err: any) {
-        alert(err.message);
+        showSuccess(
+          "Scenario added",
+          `"${name}" was imported and the cashflows were recalculated.`,
+        );
+      } catch (err) {
+        const e = err as DetailedError;
+        showError("Could not add the scenario", e.message, e.details);
       } finally {
         setRefreshing(false);
       }
@@ -738,15 +808,21 @@ function DrilldownContent() {
   const handleEditScenario = async (id: number) => {
     const sc = scenarios.find((s) => s.id === id);
     if (!sc) return;
-    const newName = prompt("Rename Scenario:", sc.name);
+    const newName = await showPrompt({
+      title: "Rename scenario",
+      label: "Scenario name",
+      defaultValue: sc.name,
+      confirmLabel: "Rename",
+    });
     if (newName === null) return;
 
     try {
       setRefreshing(true);
       await updateBehaviour(id, newName);
       await fetchScenarios();
-    } catch (err: any) {
-      alert(err.message);
+    } catch (err) {
+      const e = err as DetailedError;
+      showError("Could not rename the scenario", e.message, e.details);
     } finally {
       setRefreshing(false);
     }
@@ -764,10 +840,14 @@ function DrilldownContent() {
         setRefreshing(true);
         await updateBehaviour(id, undefined, file);
         await reprocessUpload(uploadId);
-        alert("Scenario file updated and reprocessed.");
+        showSuccess(
+          "Scenario updated",
+          "The new file was imported and the cashflows were recalculated.",
+        );
         loadData();
-      } catch (err: any) {
-        alert(err.message);
+      } catch (err) {
+        const e = err as DetailedError;
+        showError("Could not update the scenario", e.message, e.details);
       } finally {
         setRefreshing(false);
       }
@@ -776,14 +856,23 @@ function DrilldownContent() {
   };
 
   const handleDeleteScenario = async (id: number) => {
-    if (!confirm("Are you sure you want to delete this scenario?")) return;
+    const scenario = scenarios.find((s) => s.id === id);
+    const ok = await showConfirm({
+      title: `Delete scenario "${scenario?.name || id}"?`,
+      message:
+        "Its results are removed from this upload. The base (contractual) results are not affected.",
+      tone: "danger",
+      confirmLabel: "Delete scenario",
+    });
+    if (!ok) return;
     try {
       setRefreshing(true);
       await deleteBehaviour(id);
       if (activeBehaviourId === id) setActiveBehaviourId(null);
       await fetchScenarios();
-    } catch (err: any) {
-      alert(err.message);
+    } catch (err) {
+      const e = err as DetailedError;
+      showError("Could not delete the scenario", e.message, e.details);
     } finally {
       setRefreshing(false);
     }

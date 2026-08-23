@@ -47,14 +47,19 @@ betterbankings-software/
 │   │                             behaviour management, summary panel, upload, presets
 │   ├── globals.css               Tailwind v4 config (@theme) + all component styles (~44KB)
 │   ├── components/
-│   │   └── LoginPage.tsx         Login form component
+│   │   ├── LoginPage.tsx         Login form component
+│   │   └── Modal.tsx             ModalProvider + useModal() — the ONLY dialog mechanism in the app.
+│   │                             showAlert / showError / showSuccess / showConfirm / showPrompt /
+│   │                             showValidationErrors. Mounted once in layout.tsx.
 │   ├── lib/
 │   │   ├── api.ts                All backend API calls (auth, upload, results, pivot, behaviours,
 │   │   │                         presets, reference, export) — typed interfaces, fetch wrappers
 │   │   ├── cashflow.ts           Client-side amortization calculation (Python port, for local preview)
 │   │   └── parser.ts             Client-side CSV parser (for preview before upload)
 │   ├── admin/
-│   │   └── page.tsx              SuperAdmin reference data management page
+│   │   └── page.tsx              SuperAdmin Master Data page — two tabs: the editable code tables,
+│   │                             and "How to build the Excel" (per-column format + allowed codes).
+│   │                             Also serves the .xlsx template download.
 │   ├── drilldown/
 │   │   └── page.tsx              Drilldown view page (~30KB)
 │   └── history/
@@ -92,6 +97,9 @@ The main application lives in **`app/page.tsx`** (~2600 lines, `"use client"`). 
 
 ### Key Constants
 
+- `REF_TABLE_BY_KEY` — column key → master data table. **Every** place that renders a raw column
+  value goes through `displayValue()` / `mapValue()` so a Product Type reads "Loan", not "1":
+  the results table, the pivot group cells, the column filter dropdowns and the preset editor chips.
 - `INPUT_KEYS` — 27 input column identifiers (includes account_number, instrument_type, market_value, asset_liability, margin, revolving_flag)
 - `PIVOTABLE_KEYS` — 12 columns that can be used as pivot group-by keys
 - `IRRBB_LABELS`, `LCR_LABELS`, `NSFR_LABELS`, `ILAAP_LABELS` — bucket label arrays (from `api.ts`)
@@ -134,6 +142,8 @@ The main application lives in **`app/page.tsx`** (~2600 lines, `"use client"`). 
 | `reprocess(uploadId)`                                                    | `POST /api/uploads/:id/reprocess`     |                             |
 | `listPresets()` / `createPreset()` / `updatePreset()` / `deletePreset()` | `/api/presets` CRUD                   |                             |
 | `getReferenceMaps()`                                                     | `GET /api/reference-maps`             | For display name mapping    |
+| `getMasterDataSchema()`                                                  | `GET /api/master-data/schema`         | Columns + allowed codes     |
+| `downloadTemplate()`                                                     | `GET /api/master-data/template`       | .xlsx starter file          |
 | `listReference()` / `createReference()` / etc.                           | `/api/reference/:table` CRUD          | SuperAdmin only             |
 
 ### Type Definitions
@@ -177,9 +187,26 @@ All design tokens defined in `app/globals.css` under `@theme`:
 
 ## Reference Map Display
 
-The frontend fetches `GET /api/reference-maps` on load to get display names for ID-based columns. The `mapValue()` helper in `page.tsx` converts raw DB values (like `"1"`) to human-readable names (like `"Loan"`).
+The frontend fetches `GET /api/reference-maps` on load to get display names for ID-based columns. The `mapValue()` helper in `page.tsx` converts raw DB values (like `"1"`) to human-readable names (like `"Loan"`). It resolves an ID first, then falls back to matching a *name* case-insensitively — `method` and `day_count` are stored as resolved names (`"annuity"`, `"30/360"`), not IDs.
 
-Reference tables: `product_types`, `segments`, `methods`, `day_counts`, `currencies`, `instrument_types`, `transactional_types`, `installment_frequencies`
+Reference tables: `product_types`, `segments`, `methods`, `day_counts`, `currencies`, `instrument_types`, `transactional_types`, `installment_frequencies`, `insured_types`, `asset_liabilities`, `revolving_flags`
+
+**The filter dropdown shows names but stores codes.** `distinctValues` holds the raw values the
+server reported, so `selectedValues` must keep holding those. The client-side filter in
+`filteredResults` therefore matches on the display value *or* the raw row field for any column in
+`REF_TABLE_BY_KEY` — comparing only `col.getValue(row)` silently filters everything out.
+
+## Dialogs
+
+There are **no** `window.alert` / `confirm` / `prompt` calls left. Every message goes through
+`useModal()` from `app/components/Modal.tsx`:
+
+- `showError(title, message, details?)` — `details` renders the backend's per-line explanations
+  (scenario import errors arrive as `DetailedError.details` from `api.ts`)
+- `showConfirm({ title, message, tone, confirmLabel })` → `Promise<boolean>`
+- `showPrompt({ title, label, defaultValue, validate })` → `Promise<string | null>`
+- `showValidationErrors(errors, { fileName, hint })` — the upload-rejection modal: a chip per
+  offending column, then a scrollable Row / Column / What is wrong table with a "Copy all" button
 
 ---
 
@@ -191,7 +218,10 @@ The entire dashboard — upload (CSV/XLSX), results, pivot, behaviours (CSV/XLSX
 
 ### `/admin` (`app/admin/page.tsx`)
 
-SuperAdmin reference data management. CRUD operations on all 8 reference tables.
+SuperAdmin Master Data management. CRUD on all 11 reference tables, plus the "How to build the
+Excel" guide (every input column with its format, whether it is required, and the codes it accepts)
+and the Excel template download. A read-only version of the code lists is also available to every
+user on the upload page via `<MasterDataPanel>` in `page.tsx`.
 
 ### `/drilldown` (`app/drilldown/page.tsx`)
 
@@ -214,4 +244,6 @@ Upload history list with delete action.
 - **Bucket label strings must match exactly** — the frontend uses the exact same bucket label strings as the backend (e.g., `"≤ 1 M"`, `"CF <= 30D"`). Any mismatch will result in missing data.
 - **No SSR** — the main page is `"use client"` with localStorage auth, so it cannot be server-rendered.
 - **XLSX upload support** — file accept attributes include `.xlsx,.xls` for both data input and scenario uploads. The backend handles format detection by file extension.
+- **`public/sample_data.csv` / `.txt` must stay valid** — they are downloadable from the header and are rejected by the backend if they drift from the master data codes. Test them after changing validation.
+- **Never add a `window.alert`/`confirm`/`prompt`** — use `useModal()`. The provider is mounted in `layout.tsx`, so any client component under it can call the hook.
 - **ILAAP columns** — 41 ILAAP bucket columns are available in the column selector under "CF ILAAP" group. Interest is always 0 for ILAAP buckets.
