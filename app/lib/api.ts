@@ -14,12 +14,45 @@ function setToken(token: string) {
 function clearToken() {
   localStorage.removeItem("bb_token");
   localStorage.removeItem("bb_username");
+  localStorage.removeItem("bb_role");
 }
 
 function authHeaders(): Record<string, string> {
   const token = getToken();
   if (!token) return {};
   return { Authorization: `Bearer ${token}` };
+}
+
+/**
+ * fetch for every authenticated endpoint.
+ *
+ * Sessions expire server-side after 24h while `isLoggedIn()` only looks at
+ * localStorage, so a stale token used to surface as whatever the caller made
+ * of a 401 — "Failed to load the master data guide" and the like, on a page
+ * that still looked signed in. A 401 now drops the session and returns the
+ * user to the login screen once, rather than each call inventing its own
+ * error message.
+ */
+let sessionExpiryHandled = false;
+
+async function authFetch(
+  url: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const res = await fetch(url, init);
+  if (res.status === 401) {
+    // Only reload when a token was actually in play. Reloading after it has
+    // already been cleared would loop: the next call 401s again on the way
+    // back up.
+    const hadToken = getToken() !== null;
+    clearToken();
+    if (typeof window !== "undefined" && hadToken && !sessionExpiryHandled) {
+      sessionExpiryHandled = true;
+      window.location.reload();
+    }
+    throw new Error("Your session has expired — please sign in again.");
+  }
+  return res;
 }
 
 export async function login(
@@ -44,7 +77,7 @@ export async function login(
 
 export async function logout() {
   try {
-    await fetch(`${API_BASE}/api/auth/logout`, {
+    await authFetch(`${API_BASE}/api/auth/logout`, {
       method: "POST",
       headers: authHeaders(),
     });
@@ -58,7 +91,7 @@ export async function checkAuth(): Promise<boolean> {
   const token = getToken();
   if (!token) return false;
   try {
-    const res = await fetch(`${API_BASE}/api/auth/check`, {
+    const res = await authFetch(`${API_BASE}/api/auth/check`, {
       headers: authHeaders(),
     });
     return res.ok;
@@ -102,7 +135,7 @@ export async function uploadCSV(file: File): Promise<UploadResponse> {
   const formData = new FormData();
   formData.append("file", file);
 
-  const res = await fetch(`${API_BASE}/api/upload`, {
+  const res = await authFetch(`${API_BASE}/api/upload`, {
     method: "POST",
     headers: authHeaders(),
     body: formData,
@@ -130,7 +163,7 @@ export interface UploadStatus {
 }
 
 export async function getUploadStatus(id: string): Promise<UploadStatus> {
-  const res = await fetch(`${API_BASE}/api/upload/status/${id}`, {
+  const res = await authFetch(`${API_BASE}/api/upload/status/${id}`, {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to get upload status");
@@ -164,7 +197,7 @@ export interface HistoryItem {
 }
 
 export async function getHistory(): Promise<HistoryItem[]> {
-  const res = await fetch(`${API_BASE}/api/history`, {
+  const res = await authFetch(`${API_BASE}/api/history`, {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to fetch history");
@@ -172,7 +205,7 @@ export async function getHistory(): Promise<HistoryItem[]> {
 }
 
 export async function deleteUpload(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/history/${id}`, {
+  const res = await authFetch(`${API_BASE}/api/history/${id}`, {
     method: "DELETE",
     headers: authHeaders(),
   });
@@ -250,7 +283,7 @@ export async function getResults(
     q.set("behaviour_id", String(params.behaviour_id));
   if (params.filters) q.set("filters", JSON.stringify(params.filters));
 
-  const res = await fetch(`${API_BASE}/api/results/${uploadId}?${q}`, {
+  const res = await authFetch(`${API_BASE}/api/results/${uploadId}?${q}`, {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to get results");
@@ -281,7 +314,7 @@ export async function getSummary(
   if (Object.keys(filters).length > 0)
     searchParams.set("filters", JSON.stringify(filters));
 
-  const res = await fetch(
+  const res = await authFetch(
     `${API_BASE}/api/results/${uploadId}/summary?${searchParams.toString()}`,
     { headers: authHeaders() },
   );
@@ -295,7 +328,7 @@ export async function getFilterOptions(
   uploadId: string,
   column: string,
 ): Promise<string[]> {
-  const res = await fetch(
+  const res = await authFetch(
     `${API_BASE}/api/results/${uploadId}/filter-options?column=${column}`,
     { headers: authHeaders() },
   );
@@ -326,7 +359,7 @@ export async function getPivot(
   if (Object.keys(filters).length > 0)
     searchParams.set("filters", JSON.stringify(filters));
 
-  const res = await fetch(
+  const res = await authFetch(
     `${API_BASE}/api/pivot/${uploadId}?${searchParams.toString()}`,
     { headers: authHeaders() },
   );
@@ -363,7 +396,7 @@ export async function downloadExport(
 ) {
   const url = getExportUrl(uploadId, filterType, filters, behaviourId);
   // Use fetch with auth header instead of direct link
-  const res = await fetch(url, { headers: authHeaders() });
+  const res = await authFetch(url, { headers: authHeaders() });
   if (!res.ok) throw new Error("Export failed");
 
   const blob = await res.blob();
@@ -433,7 +466,7 @@ export interface ReferenceItem {
 }
 
 export async function listReference(table: string): Promise<ReferenceItem[]> {
-  const res = await fetch(`${API_BASE}/api/reference/${table}`, {
+  const res = await authFetch(`${API_BASE}/api/reference/${table}`, {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to list reference");
@@ -444,7 +477,7 @@ export async function createReference(
   table: string,
   item: ReferenceItem,
 ): Promise<ReferenceItem> {
-  const res = await fetch(`${API_BASE}/api/reference/${table}`, {
+  const res = await authFetch(`${API_BASE}/api/reference/${table}`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify(item),
@@ -461,7 +494,7 @@ export async function updateReference(
   id: string,
   item: Partial<ReferenceItem>,
 ): Promise<ReferenceItem> {
-  const res = await fetch(`${API_BASE}/api/reference/${table}/${id}`, {
+  const res = await authFetch(`${API_BASE}/api/reference/${table}/${id}`, {
     method: "PUT",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify(item),
@@ -477,7 +510,7 @@ export async function deleteReference(
   table: string,
   id: string,
 ): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/reference/${table}/${id}`, {
+  const res = await authFetch(`${API_BASE}/api/reference/${table}/${id}`, {
     method: "DELETE",
     headers: authHeaders(),
   });
@@ -522,7 +555,7 @@ export interface MasterDataSchema {
 
 /** The upload contract: which columns exist and which codes each accepts. */
 export async function getMasterDataSchema(): Promise<MasterDataSchema> {
-  const res = await fetch(`${API_BASE}/api/master-data/schema`, {
+  const res = await authFetch(`${API_BASE}/api/master-data/schema`, {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to load the master data guide");
@@ -531,7 +564,7 @@ export async function getMasterDataSchema(): Promise<MasterDataSchema> {
 
 /** Downloads a starter .xlsx pre-filled with headers, hints and code lists. */
 export async function downloadTemplate(): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/master-data/template`, {
+  const res = await authFetch(`${API_BASE}/api/master-data/template`, {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to build the Excel template");
@@ -589,7 +622,7 @@ export interface BehaviourBucket {
 }
 
 export async function listBehaviours(uploadId: string): Promise<Behaviour[]> {
-  const res = await fetch(`${API_BASE}/api/uploads/${uploadId}/behaviours`, {
+  const res = await authFetch(`${API_BASE}/api/uploads/${uploadId}/behaviours`, {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to list behaviours");
@@ -604,7 +637,7 @@ export async function uploadBehaviour(
   const formData = new FormData();
   formData.append("file", file);
   formData.append("name", name);
-  const res = await fetch(`${API_BASE}/api/uploads/${uploadId}/behaviours`, {
+  const res = await authFetch(`${API_BASE}/api/uploads/${uploadId}/behaviours`, {
     method: "POST",
     headers: authHeaders(),
     body: formData,
@@ -617,7 +650,7 @@ export async function uploadBehaviour(
 }
 
 export async function getBehaviour(id: number): Promise<Behaviour> {
-  const res = await fetch(`${API_BASE}/api/behaviours/${id}`, {
+  const res = await authFetch(`${API_BASE}/api/behaviours/${id}`, {
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error("Failed to get behaviour");
@@ -625,7 +658,7 @@ export async function getBehaviour(id: number): Promise<Behaviour> {
 }
 
 export async function deleteBehaviour(id: number): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/behaviours/${id}`, {
+  const res = await authFetch(`${API_BASE}/api/behaviours/${id}`, {
     method: "DELETE",
     headers: authHeaders(),
   });
@@ -643,7 +676,7 @@ export async function updateBehaviour(
   const formData = new FormData();
   if (name) formData.append("name", name);
   if (file) formData.append("file", file);
-  const res = await fetch(`${API_BASE}/api/behaviours/${id}`, {
+  const res = await authFetch(`${API_BASE}/api/behaviours/${id}`, {
     method: "PUT",
     headers: authHeaders(),
     body: formData,
@@ -659,7 +692,7 @@ export async function updateBehaviour(
 // ─── Reprocess ──────────────────────────────────────────────
 
 export async function reprocessUpload(uploadId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/uploads/${uploadId}/reprocess`, {
+  const res = await authFetch(`${API_BASE}/api/uploads/${uploadId}/reprocess`, {
     method: "POST",
     headers: authHeaders(),
   });
@@ -671,7 +704,7 @@ export async function reprocessUpload(uploadId: string): Promise<void> {
 export type ReferenceMaps = Record<string, Record<string, string>>;
 
 export async function loadAllReferenceMaps(): Promise<ReferenceMaps> {
-  const res = await fetch(`${API_BASE}/api/reference-maps`, {
+  const res = await authFetch(`${API_BASE}/api/reference-maps`, {
     headers: authHeaders(),
   });
   if (!res.ok) return {};
@@ -700,7 +733,7 @@ export interface PresetConfig {
 }
 
 export async function listPresets(): Promise<PresetConfig[]> {
-  const res = await fetch(`${API_BASE}/api/presets`, {
+  const res = await authFetch(`${API_BASE}/api/presets`, {
     headers: authHeaders(),
   });
   if (!res.ok) return [];
@@ -711,7 +744,7 @@ export async function createPreset(
   name: string,
   config: PresetConfig["config"],
 ): Promise<{ id: number; name: string }> {
-  const res = await fetch(`${API_BASE}/api/presets`, {
+  const res = await authFetch(`${API_BASE}/api/presets`, {
     method: "POST",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({ name, config }),
@@ -728,7 +761,7 @@ export async function updatePreset(
   name: string,
   config: PresetConfig["config"],
 ): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/presets/${id}`, {
+  const res = await authFetch(`${API_BASE}/api/presets/${id}`, {
     method: "PUT",
     headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify({ name, config }),
@@ -740,7 +773,7 @@ export async function updatePreset(
 }
 
 export async function deletePreset(id: number): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/presets/${id}`, {
+  const res = await authFetch(`${API_BASE}/api/presets/${id}`, {
     method: "DELETE",
     headers: authHeaders(),
   });

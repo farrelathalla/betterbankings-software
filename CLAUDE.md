@@ -116,6 +116,15 @@ The main application lives in **`app/page.tsx`** (~2600 lines, `"use client"`). 
 
 **Base URL:** `https://103.103.22.207:8002`
 
+### `authFetch` — 401 handling
+
+Every authenticated call in `api.ts` goes through `authFetch`, **not** bare `fetch` (only `login`
+uses `fetch`, since a wrong password legitimately 401s). Sessions expire server-side after 24h
+while `isLoggedIn()` only reads localStorage, so a stale token used to surface as whatever error
+message the individual caller had written. `authFetch` clears the session and reloads to the login
+screen once instead. It only reloads when a token was actually present — reloading after the token
+is already cleared would loop.
+
 ### Auth Functions
 
 - `login(username, password)` → stores token + username + role in `localStorage`
@@ -243,7 +252,7 @@ Upload history list with delete action.
 - **`behaviour_id` handling** — `"null"`, `"base"`, or empty all mean "show base results (no scenario)". A numeric string means "show results for that scenario behaviour".
 - **Bucket label strings must match exactly** — the frontend uses the exact same bucket label strings as the backend (e.g., `"≤ 1 M"`, `"CF <= 30D"`). Any mismatch will result in missing data.
 - **No SSR** — the main page is `"use client"` with localStorage auth, so it cannot be server-rendered.
-- **XLSX upload support** — file accept attributes include `.xlsx,.xls` for both data input and scenario uploads. The backend handles format detection by file extension.
-- **`public/sample_data.csv` / `.txt` must stay valid** — they are downloadable from the header and are rejected by the backend if they drift from the master data codes. Test them after changing validation.
+- **XLSX is the primary format** — the header button downloads `public/sample_data.xlsx`, file pickers list `.xlsx` first, and the copy leads with Excel. CSV/TXT parsing is untouched server-side and `public/sample_data.csv` is still in the repo, but nothing in the UI points at it.
+- **`public/sample_data.xlsx` is the one the UI offers**; `.csv` / `.txt` are kept as working fallbacks. All three must stay valid — they are downloadable from the header and are rejected by the backend if they drift from the master data codes. Test them after changing validation.
 - **Never add a `window.alert`/`confirm`/`prompt`** — use `useModal()`. The provider is mounted in `layout.tsx`, so any client component under it can call the hook.
 - **ILAAP columns** — 41 ILAAP bucket columns are available in the column selector under "CF ILAAP" group. Interest is always 0 for ILAAP buckets.

@@ -771,7 +771,7 @@ function DrilldownContent() {
     const name = await showPrompt({
       title: "Add a scenario",
       message:
-        "Pick a name, then choose the scenario file (2-section CSV, or XLSX with a Bucket and a Cashflow Assumption sheet).",
+        "Pick a name, then choose the scenario workbook — an .xlsx with a Bucket sheet and a Cashflow Assumption sheet. A 2-section CSV still works too.",
       label: "Scenario name",
       placeholder: "e.g. Covid Behaviour",
       confirmLabel: "Choose file…",
@@ -780,7 +780,7 @@ function DrilldownContent() {
 
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".csv";
+    input.accept = ".xlsx,.xls,.csv";
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
@@ -831,7 +831,7 @@ function DrilldownContent() {
   const handleRefreshScenario = async (id: number) => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".csv";
+    input.accept = ".xlsx,.xls,.csv";
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;

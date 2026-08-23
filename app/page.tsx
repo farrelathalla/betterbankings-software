@@ -1746,10 +1746,13 @@ export default function Home() {
     [uploadId, processed],
   );
 
+  // Excel is the format the app is built around now. CSV/TXT still parse
+  // server-side and public/sample_data.csv is still there, but nothing in the
+  // UI points at it any more.
   const handleDownloadSample = useCallback(() => {
     const a = document.createElement("a");
-    a.href = "/sample_data.csv";
-    a.download = "sample_data.csv";
+    a.href = "/sample_data.xlsx";
+    a.download = "sample_data.xlsx";
     a.click();
   }, []);
 
@@ -1881,7 +1884,7 @@ export default function Home() {
     const name = await showPrompt({
       title: "Add a scenario",
       message:
-        "Pick a name, then choose the scenario file (2-section CSV, or XLSX with a Bucket and a Cashflow Assumption sheet).",
+        "Pick a name, then choose the scenario workbook — an .xlsx with a Bucket sheet and a Cashflow Assumption sheet. A 2-section CSV still works too.",
       label: "Scenario name",
       placeholder: "e.g. Covid Behaviour",
       confirmLabel: "Choose file…",
@@ -1889,7 +1892,7 @@ export default function Home() {
     if (!name) return;
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".csv,.xlsx,.xls";
+    input.accept = ".xlsx,.xls,.csv";
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
@@ -1938,7 +1941,7 @@ export default function Home() {
   const handleRefreshScenario = async (id: number) => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".csv,.xlsx,.xls";
+    input.accept = ".xlsx,.xls,.csv";
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
@@ -2019,7 +2022,7 @@ export default function Home() {
         </div>
         <div className="header-actions">
           <button className="btn-sample" onClick={handleDownloadSample}>
-            📥 Sample CSV
+            📥 Sample XLSX
           </button>
           <a href="/history" className="btn-sample header-nav-link">
             📂 History
@@ -2057,14 +2060,14 @@ export default function Home() {
               Drop your file here or click to browse
             </div>
             <div className="upload-text-sub">
-              Supports <span>.csv</span>, <span>.txt</span>, and{" "}
-              <span>.xlsx</span> files — tab, semicolon, or comma delimited
-              (CSV/TXT) or Excel format (XLSX)
+              Excel <span>.xlsx</span> is the expected format — grab the
+              template below to start one. <span>.csv</span> and{" "}
+              <span>.txt</span> (tab, semicolon or comma delimited) still work.
             </div>
             <input
               ref={fileInputRef}
               type="file"
-              accept=".txt,.csv,.tsv,.xlsx,.xls"
+              accept=".xlsx,.xls,.csv,.txt,.tsv"
               style={{ display: "none" }}
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -2466,7 +2469,7 @@ export default function Home() {
             <div className="empty-state-icon">📊</div>
             <h3>No data yet</h3>
             <p>
-              Upload a CSV/TXT/XLSX file with your loan data, then click{" "}
+              Upload an Excel (.xlsx) file with your loan data, then click{" "}
               <strong>&quot;Process Cashflow&quot;</strong> to see the results.
             </p>
           </div>
